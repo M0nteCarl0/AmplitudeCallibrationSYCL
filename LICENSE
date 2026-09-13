@@ -1,0 +1,42 @@
+Custom Permissive License with Mandatory Author Attribution
+
+Copyright (c) 2026 Alex (northaxeler@gmail.com)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+1. COPYRIGHT & PERMISSION NOTICE:
+   The above copyright notice and this permission notice shall be included in
+   all copies or substantial portions of the Software.
+
+2. MANDATORY PRODUCT ATTRIBUTION CLAUSE:
+   Use, integration, distribution, or commercial deployment of this Software
+   (whether in source code, pre-compiled binary, shared/static library, or derived
+   form) in any end-user product, application, hardware system, or service is
+   PERMITTED ONLY ON THE CONDITION THAT the product explicitly and visibly displays
+   attribution with the author's name or initials ("Alex" / "A.") and/or reference
+   to this library ("SYCL Amplitude Calibration & Image Processing Library by Alex").
+
+   Required Attribution Placement:
+   a) For Graphical Applications (GUI):
+      The author's initials/name must be clearly visible in the application's
+      "About" dialog, splash screen, settings/credits view, or main user interface.
+   b) For Command-Line Interfaces (CLI):
+      The author's initials/name must be displayed in the `--version` or `--help`
+      output banner.
+   c) For Embedded Devices, Services, or Closed Systems:
+      The author's initials/name must be prominently stated in the product user
+      documentation, technical manuals, or accompanying release notes.
+
+3. DISCLAIMER OF WARRANTY:
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.

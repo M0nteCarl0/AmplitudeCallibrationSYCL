@@ -1,0 +1,189 @@
+name: Build and Package Artifacts
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Windows x64 (MSBuild / oneAPI)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Cache Intel oneAPI installation
+        id: cache-oneapi
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\Program Files (x86)\Intel\oneAPI
+          key: ${{ runner.os }}-oneapi-2024
+
+      - name: Install Intel oneAPI Base Toolkit (if not cached)
+        if: steps.cache-oneapi.outputs.cache-hit != 'true'
+        shell: powershell
+        run: |
+          Write-Host "Installing Intel oneAPI via winget..."
+          winget install --id Intel.OneAPI.BaseToolkit --accept-package-agreements --accept-source-agreements --silent --disable-interactivity
+
+      - name: Configure oneAPI environment variables
+        shell: powershell
+        run: |
+          $setvarsPaths = @(
+            "C:\Program Files (x86)\Intel\oneAPI\setvars.bat",
+            "D:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+          )
+          $setvars = $setvarsPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if ($setvars) {
+            Write-Host "Found setvars at: $setvars"
+            cmd /c "`"$setvars`" intel64 && set" | ForEach-Object {
+              if ($_ -match '^(.*?)=(.*)$') {
+                $varName = $matches[1]
+                $varValue = $matches[2]
+                if ($varName -eq "PATH") {
+                  $varValue -split ';' | Where-Object { $_ } | ForEach-Object {
+                    Add-Content -Path $env:GITHUB_PATH -Value $_
+                  }
+                } else {
+                  Add-Content -Path $env:GITHUB_ENV -Value "$varName=$varValue"
+                }
+              }
+            }
+          } else {
+            Write-Warning "setvars.bat not found; falling back to default PATH."
+            $defaultBin = "C:\Program Files (x86)\Intel\oneAPI\compiler\latest\bin"
+            if (Test-Path $defaultBin) {
+              Add-Content -Path $env:GITHUB_PATH -Value $defaultBin
+            }
+          }
+
+      - name: Build Solution with MSBuild (Release x64)
+        shell: cmd
+        run: |
+          msbuild AmplitudeCallibrationSYCL.sln /p:Configuration=Release /p:Platform=x64 /m /verbosity:minimal
+
+      - name: Stage Artifacts
+        shell: powershell
+        run: |
+          $stageDir = "artifacts/sycl-imageprocess-windows-x64"
+          New-Item -ItemType Directory -Force -Path "$stageDir/bin" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$stageDir/lib" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$stageDir/include" | Out-Null
+
+          # Copy binaries
+          Copy-Item -Path "x64/Release/SYCL_ImageProcess.dll" -Destination "$stageDir/bin" -Force
+          Copy-Item -Path "x64/Release/AmplitudeCallibrationSYCL.exe" -Destination "$stageDir/bin" -Force
+          Copy-Item -Path "x64/Release/SimpleExample.exe" -Destination "$stageDir/bin" -Force
+          Copy-Item -Path "x64/Release/SYCL_ImageProcess.lib" -Destination "$stageDir/lib" -Force
+
+          # Copy headers
+          Copy-Item -Path "include/sycl_ip" -Destination "$stageDir/include" -Recurse -Force
+
+          # Copy documentation and license
+          Copy-Item -Path "README.md" -Destination "$stageDir" -Force
+          Copy-Item -Path "LICENSE" -Destination "$stageDir" -Force
+
+          # Create zip package
+          Compress-Archive -Path "$stageDir/*" -DestinationPath "artifacts/sycl-imageprocess-windows-x64.zip" -Force
+
+      - name: Upload Windows Directory Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sycl-imageprocess-windows-x64
+          path: artifacts/sycl-imageprocess-windows-x64/
+          retention-days: 30
+
+      - name: Upload Windows Zip Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: sycl-imageprocess-windows-x64-zip
+          path: artifacts/sycl-imageprocess-windows-x64.zip
+          retention-days: 30
+
+  build-linux:
+    name: Linux x64 (CMake / icpx / Ninja)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Intel oneAPI DPC++ compiler
+        run: |
+          wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor | sudo tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | sudo tee /etc/apt/sources.list.d/oneAPI.list
+          sudo apt-get update -o Dir::Etc::sourcelist="sources.list.d/oneAPI.list" -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0"
+          sudo apt-get install -y --no-install-recommends ninja-build intel-oneapi-compiler-dpcpp-cpp intel-oneapi-runtime-libs
+
+      - name: Configure and Build with CMake & Ninja
+        run: |
+          source /opt/intel/oneapi/setvars.sh
+          cmake -B build -G Ninja \
+            -DCMAKE_CXX_COMPILER=icpx \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DBUILD_EXAMPLES=ON
+          cmake --build build --config Release
+
+      - name: Stage Linux Artifacts
+        run: |
+          STAGE="artifacts/sycl-imageprocess-linux-x64"
+          mkdir -p "$STAGE/bin" "$STAGE/lib" "$STAGE/include"
+          cp build/bin/AmplitudeCallibrationSYCL "$STAGE/bin/" 2>/dev/null || true
+          cp build/bin/SimpleExample "$STAGE/bin/" 2>/dev/null || true
+          cp build/lib/* "$STAGE/lib/" 2>/dev/null || true
+          cp -r include/sycl_ip "$STAGE/include/"
+          cp README.md LICENSE "$STAGE/"
+          tar -czvf artifacts/sycl-imageprocess-linux-x64.tar.gz -C "$STAGE" .
+
+      - name: Upload Linux Directory Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sycl-imageprocess-linux-x64
+          path: artifacts/sycl-imageprocess-linux-x64/
+          retention-days: 30
+
+      - name: Upload Linux Tarball Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: sycl-imageprocess-linux-x64-tarball
+          path: artifacts/sycl-imageprocess-linux-x64.tar.gz
+          retention-days: 30
+
+  release:
+    name: Publish GitHub Release
+    needs: [build-windows, build-linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Windows Zip Package
+        uses: actions/download-artifact@v4
+        with:
+          name: sycl-imageprocess-windows-x64-zip
+          path: release-assets
+
+      - name: Download Linux Tarball Package
+        uses: actions/download-artifact@v4
+        with:
+          name: sycl-imageprocess-linux-x64-tarball
+          path: release-assets
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-assets/sycl-imageprocess-windows-x64.zip
+            release-assets/sycl-imageprocess-linux-x64.tar.gz
+          draft: false
+          prerelease: false
+          generate_release_notes: true

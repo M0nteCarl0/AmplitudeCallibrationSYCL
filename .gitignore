@@ -1,0 +1,43 @@
+# Visual Studio / MSBuild cache & user files
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.VC.db
+*.VC.opendb
+*.VC.VC.opendb
+ipch/
+[Aa]uto[Rr]ecover*
+*.TMP
+*.tmp
+
+# Build outputs & compiler intermediates
+x64/
+x86/
+[Dd]ebug/
+[Rr]elease/
+build/
+bin/
+lib/
+artifacts/
+*.idb
+*.pdb
+*.obj
+*.ilk
+*.exp
+*.tlog
+*.lastbuildstate
+
+# Generated calibration models & outputs
+*.fit
+*.INL
+*.ARM
+SimpleExample_Output.flr
+Output_Calibrated.flr
+ProcessedImage*.flr
+
+# Large binary datasets & test frames
+AmplitudeCallibrationSYCL/490_kV/
+AmplitudeCallibrationSYCL/RawImage.flr
+*.flr

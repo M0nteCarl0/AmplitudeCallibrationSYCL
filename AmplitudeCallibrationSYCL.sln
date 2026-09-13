@@ -1,0 +1,42 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.11.35312.102
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "SYCL_ImageProcess", "SYCL_ImageProcess.vcxproj", "{A1B2C3D4-E5F6-47A8-9012-3456789ABCDE}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "AmplitudeCallibrationSYCL", "AmplitudeCallibrationSYCL\AmplitudeCallibrationSYCL.vcxproj", "{9F72EFF0-4690-4668-A0FB-F610649517CA}"
+	ProjectSection(ProjectDependencies) = postProject
+		{A1B2C3D4-E5F6-47A8-9012-3456789ABCDE} = {A1B2C3D4-E5F6-47A8-9012-3456789ABCDE}
+	EndProjectSection
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "SimpleExample", "SimpleExample.vcxproj", "{B2C3D4E5-F6A7-48B9-0123-456789ABCDEF}"
+	ProjectSection(ProjectDependencies) = postProject
+		{A1B2C3D4-E5F6-47A8-9012-3456789ABCDE} = {A1B2C3D4-E5F6-47A8-9012-3456789ABCDE}
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{A1B2C3D4-E5F6-47A8-9012-3456789ABCDE}.Debug|x64.ActiveCfg = Debug|x64
+		{A1B2C3D4-E5F6-47A8-9012-3456789ABCDE}.Debug|x64.Build.0 = Debug|x64
+		{A1B2C3D4-E5F6-47A8-9012-3456789ABCDE}.Release|x64.ActiveCfg = Release|x64
+		{A1B2C3D4-E5F6-47A8-9012-3456789ABCDE}.Release|x64.Build.0 = Release|x64
+		{9F72EFF0-4690-4668-A0FB-F610649517CA}.Debug|x64.ActiveCfg = Debug|x64
+		{9F72EFF0-4690-4668-A0FB-F610649517CA}.Debug|x64.Build.0 = Debug|x64
+		{9F72EFF0-4690-4668-A0FB-F610649517CA}.Release|x64.ActiveCfg = Release|x64
+		{9F72EFF0-4690-4668-A0FB-F610649517CA}.Release|x64.Build.0 = Release|x64
+		{B2C3D4E5-F6A7-48B9-0123-456789ABCDEF}.Debug|x64.ActiveCfg = Debug|x64
+		{B2C3D4E5-F6A7-48B9-0123-456789ABCDEF}.Debug|x64.Build.0 = Debug|x64
+		{B2C3D4E5-F6A7-48B9-0123-456789ABCDEF}.Release|x64.ActiveCfg = Release|x64
+		{B2C3D4E5-F6A7-48B9-0123-456789ABCDEF}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {4498DD2C-03CD-4008-8F5F-525A637DA1C5}
+	EndGlobalSection
+EndGlobal
