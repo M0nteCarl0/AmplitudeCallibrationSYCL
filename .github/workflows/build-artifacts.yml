@@ -38,20 +38,18 @@ jobs:
           arch: x64
 
       - name: Download and install Intel oneAPI DPC++ compiler
+        timeout-minutes: 25
+        shell: cmd
         run: |
-          echo Downloading oneAPI toolkit...
           curl.exe --fail --retry 5 --retry-delay 5 -L --output "%TEMP%\webimage.exe" "%WINDOWS_TOOLKIT_URL%"
           echo Extracting installer...
-          start /b /wait "%TEMP%\webimage.exe" -s -x -f webimage_extracted --log extract.log
+          "%TEMP%\webimage.exe" -s -x -f webimage_extracted --log extract.log
+          if errorlevel 1 exit /b 1
           del "%TEMP%\webimage.exe"
-          echo Installing component %WINDOWS_DPCPP_COMPONENTS% ...
-          webimage_extracted\bootstrapper.exe -s --action install --components=%WINDOWS_DPCPP_COMPONENTS% --eula=accept -p=NEED_VS2017_INTEGRATION=0 -p=NEED_VS2019_INTEGRATION=0 -p=NEED_VS2022_INTEGRATION=1 --log-dir=.
-          set INSTALL_EXIT=%ERRORLEVEL%
+          echo Installing DPC++ component...
+          webimage_extracted\bootstrapper.exe -s --action install --components=%WINDOWS_DPCPP_COMPONENTS% --eula=accept -p=NEED_VS2017_INTEGRATION=0 -p=NEED_VS2019_INTEGRATION=0 -p=NEED_VS2022_INTEGRATION=0 --log-dir=.
+          if errorlevel 1 exit /b 1
           rd /s /q webimage_extracted
-          if not %INSTALL_EXIT%==0 (
-            echo Installer failed with %INSTALL_EXIT%
-            exit /b %INSTALL_EXIT%
-          )
 
       - name: Configure and Build with CMake
         run: |
