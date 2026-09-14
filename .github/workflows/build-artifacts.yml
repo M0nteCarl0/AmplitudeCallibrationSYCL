@@ -22,12 +22,24 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      - name: Install Intel oneAPI DPC++ Compiler
-        uses: intel-oneapi-setup-actions/setup-oneapi@v1
-        with:
-          components: |
-            intel-oneapi-compiler-dpcpp-cpp
-            intel-oneapi-compiler-shared-runtime-libs
+      - name: Download and Install Intel oneAPI DPC++ Compiler
+        shell: powershell
+        run: |
+          Write-Host "Downloading Intel oneAPI DPC++/C++ compiler standalone installer..."
+          $url = "https://registrationcenter-download.intel.com/akdlm/IRC_NAS/b0fefcb4-dcbc-4da7-be75-d142ce025ec1/w_dpcpp-cpp-compiler_p_2024.1.0.963_offline.exe"
+          $installerPath = "$env:TEMP\oneapi_installer.exe"
+          
+          Invoke-WebRequest -Uri $url -OutFile $installerPath -UseBasicParsing
+          
+          Write-Host "Installing Intel DPC++ compiler silently..."
+          $process = Start-Process -FilePath $installerPath -ArgumentList "-s", "-a", "--silent", "--eula", "accept" -Wait -PassThru -NoNewWindow
+          
+          Remove-Item -Path $installerPath -Force -ErrorAction SilentlyContinue
+          
+          if ($process.ExitCode -ne 0) {
+            Write-Error "Installer exited with non-zero error code: $($process.ExitCode)"
+            exit $process.ExitCode
+          }
 
       - name: Configure oneAPI environment variables
         shell: powershell
