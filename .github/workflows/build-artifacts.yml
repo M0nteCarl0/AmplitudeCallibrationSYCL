@@ -11,91 +11,104 @@ on:
 permissions:
   contents: write
 
+env:
+  # Current toolkit from oneapi-src/oneapi-ci (update when Intel ships a new kit)
+  WINDOWS_TOOLKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/4144bec3-82ce-4672-bd71-5c93a79cd5e7/intel-oneapi-toolkit-2026.1.0.191_offline.exe
+  WINDOWS_DPCPP_COMPONENTS: intel.oneapi.win.cpp-dpcpp-common
+
 jobs:
   build-windows:
-    name: Windows x64 (MSBuild / oneAPI)
-    runs-on: windows-latest
+    name: Windows x64 (CMake / icx / Ninja)
+    # Pin 2022: VS integration and oneAPI toolsets are reliable here.
+    # windows-latest is currently 2025 and often breaks Intel VS integration.
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: cmd
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
 
-      - name: Download and Install Intel oneAPI DPC++ Compiler
-        shell: powershell
+      - name: Setup MSVC dev command prompt
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Download and install Intel oneAPI DPC++ compiler
         run: |
-          Write-Host "Downloading Intel oneAPI DPC++/C++ compiler standalone installer..."
-          $url = "https://registrationcenter-download.intel.com/akdlm/IRC_NAS/b0fefcb4-dcbc-4da7-be75-d142ce025ec1/w_dpcpp-cpp-compiler_p_2024.1.0.963_offline.exe"
-          $installerPath = "$env:TEMP\oneapi_installer.exe"
-          
-          Invoke-WebRequest -Uri $url -OutFile $installerPath -UseBasicParsing
-          
-          Write-Host "Installing Intel DPC++ compiler silently..."
-          $process = Start-Process -FilePath $installerPath -ArgumentList "-s", "-a", "--silent", "--eula", "accept" -Wait -PassThru -NoNewWindow
-          
-          Remove-Item -Path $installerPath -Force -ErrorAction SilentlyContinue
-          
-          if ($process.ExitCode -ne 0) {
-            Write-Error "Installer exited with non-zero error code: $($process.ExitCode)"
-            exit $process.ExitCode
+          echo Downloading oneAPI toolkit...
+          curl.exe --fail --retry 5 --retry-delay 5 -L --output "%TEMP%\webimage.exe" "%WINDOWS_TOOLKIT_URL%"
+          echo Extracting installer...
+          start /b /wait "%TEMP%\webimage.exe" -s -x -f webimage_extracted --log extract.log
+          del "%TEMP%\webimage.exe"
+          echo Installing component %WINDOWS_DPCPP_COMPONENTS% ...
+          webimage_extracted\bootstrapper.exe -s --action install --components=%WINDOWS_DPCPP_COMPONENTS% --eula=accept -p=NEED_VS2017_INTEGRATION=0 -p=NEED_VS2019_INTEGRATION=0 -p=NEED_VS2022_INTEGRATION=1 --log-dir=.
+          set INSTALL_EXIT=%ERRORLEVEL%
+          rd /s /q webimage_extracted
+          if not %INSTALL_EXIT%==0 (
+            echo Installer failed with %INSTALL_EXIT%
+            exit /b %INSTALL_EXIT%
+          )
+
+      - name: Configure and Build with CMake
+        run: |
+          call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 vs2022
+          if errorlevel 1 (
+            call "C:\Program Files\Intel\oneAPI\setvars.bat" intel64 vs2022
+          )
+          where icx
+          where icpx
+          cmake -B build -G Ninja ^
+            -DCMAKE_C_COMPILER=icx ^
+            -DCMAKE_CXX_COMPILER=icx ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DBUILD_SHARED_LIBS=ON ^
+            -DBUILD_EXAMPLES=ON
+          cmake --build build --config Release
+
+      - name: Stage Artifacts
+        shell: pwsh
+        run: |
+          $stageDir = "artifacts/sycl-imageprocess-windows-x64"
+          New-Item -ItemType Directory -Force -Path "$stageDir/bin","$stageDir/lib","$stageDir/include" | Out-Null
+
+          $candidates = @(
+            "build/bin",
+            "build/Release",
+            "build",
+            "x64/Release",
+            "bin",
+            "bin/Release"
+          )
+
+          foreach ($root in $candidates) {
+            if (Test-Path $root) {
+              Get-ChildItem -Path $root -Recurse -Include *.dll,*.exe -ErrorAction SilentlyContinue |
+                ForEach-Object { Copy-Item $_.FullName "$stageDir/bin" -Force }
+              Get-ChildItem -Path $root -Recurse -Include *.lib,*.exp -ErrorAction SilentlyContinue |
+                ForEach-Object { Copy-Item $_.FullName "$stageDir/lib" -Force }
+            }
           }
 
-      - name: Configure oneAPI environment variables
-        shell: powershell
-        run: |
-          $setvarsPaths = @(
-            "C:\Program Files (x86)\Intel\oneAPI\setvars.bat",
-            "C:\Program Files\Intel\oneAPI\setvars.bat"
-          )
-          $setvars = $setvarsPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if ($setvars) {
-            Write-Host "Found setvars at: $setvars"
-            cmd /c "`"$setvars`" intel64 && set" | ForEach-Object {
-              if ($_ -match '^(.*?)=(.*)$') {
-                $varName = $matches[1]
-                $varValue = $matches[2]
-                if ($varName -eq "PATH") {
-                  $varValue -split ';' | Where-Object { $_ } | ForEach-Object {
-                    Add-Content -Path $env:GITHUB_PATH -Value $_
-                  }
-                } else {
-                  Add-Content -Path $env:GITHUB_ENV -Value "$varName=$varValue"
-                }
-              }
-            }
-          } else {
-            Write-Error "setvars.bat was not found in expected installation locations."
+          if (Test-Path "include/sycl_ip") {
+            Copy-Item -Path "include/sycl_ip" -Destination "$stageDir/include" -Recurse -Force
+          } elseif (Test-Path "include") {
+            Copy-Item -Path "include" -Destination "$stageDir/include" -Recurse -Force
+          }
+
+          if (Test-Path "README.md") { Copy-Item README.md $stageDir -Force }
+          if (Test-Path "LICENSE")   { Copy-Item LICENSE   $stageDir -Force }
+
+          $binCount = (Get-ChildItem "$stageDir/bin" -ErrorAction SilentlyContinue | Measure-Object).Count
+          if ($binCount -eq 0) {
+            Write-Error "No binaries were staged. Dumping build tree:"
+            Get-ChildItem -Recurse -File build,x64 -ErrorAction SilentlyContinue | Select-Object FullName
             exit 1
           }
 
-      - name: Build Solution with MSBuild (Release x64)
-        shell: cmd
-        run: |
-          msbuild AmplitudeCallibrationSYCL.sln /p:Configuration=Release /p:Platform=x64 /m /verbosity:minimal
-
-      - name: Stage Artifacts
-        shell: powershell
-        run: |
-          $stageDir = "artifacts/sycl-imageprocess-windows-x64"
-          New-Item -ItemType Directory -Force -Path "$stageDir/bin" | Out-Null
-          New-Item -ItemType Directory -Force -Path "$stageDir/lib" | Out-Null
-          New-Item -ItemType Directory -Force -Path "$stageDir/include" | Out-Null
-
-          # Copy binaries
-          Copy-Item -Path "x64/Release/SYCL_ImageProcess.dll" -Destination "$stageDir/bin" -Force
-          Copy-Item -Path "x64/Release/AmplitudeCallibrationSYCL.exe" -Destination "$stageDir/bin" -Force
-          Copy-Item -Path "x64/Release/SimpleExample.exe" -Destination "$stageDir/bin" -Force
-          Copy-Item -Path "x64/Release/SYCL_ImageProcess.lib" -Destination "$stageDir/lib" -Force
-
-          # Copy headers
-          Copy-Item -Path "include/sycl_ip" -Destination "$stageDir/include" -Recurse -Force
-
-          # Copy documentation and license
-          Copy-Item -Path "README.md" -Destination "$stageDir" -Force
-          Copy-Item -Path "LICENSE" -Destination "$stageDir" -Force
-
-          # Create zip package
           Compress-Archive -Path "$stageDir/*" -DestinationPath "artifacts/sycl-imageprocess-windows-x64.zip" -Force
 
       - name: Upload Windows Directory Artifacts
@@ -112,9 +125,21 @@ jobs:
           path: artifacts/sycl-imageprocess-windows-x64.zip
           retention-days: 30
 
+      - name: Upload oneAPI install logs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-oneapi-install-logs
+          path: |
+            extract.log
+            bootstrapper*
+            installer*
+          if-no-files-found: ignore
+          retention-days: 7
+
   build-linux:
     name: Linux x64 (CMake / icpx / Ninja)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -140,11 +165,10 @@ jobs:
         run: |
           STAGE="artifacts/sycl-imageprocess-linux-x64"
           mkdir -p "$STAGE/bin" "$STAGE/lib" "$STAGE/include"
-          cp build/bin/AmplitudeCallibrationSYCL "$STAGE/bin/" 2>/dev/null || true
-          cp build/bin/SimpleExample "$STAGE/bin/" 2>/dev/null || true
-          cp build/lib/* "$STAGE/lib/" 2>/dev/null || true
-          cp -r include/sycl_ip "$STAGE/include/"
-          cp README.md LICENSE "$STAGE/"
+          find build -type f \( -name 'AmplitudeCallibrationSYCL' -o -name 'SimpleExample' \) -exec cp {} "$STAGE/bin/" \; || true
+          find build -type f \( -name '*.so' -o -name '*.a' \) -exec cp {} "$STAGE/lib/" \; || true
+          cp -r include/sycl_ip "$STAGE/include/" 2>/dev/null || cp -r include "$STAGE/include/" 2>/dev/null || true
+          cp README.md LICENSE "$STAGE/" 2>/dev/null || true
           tar -czvf artifacts/sycl-imageprocess-linux-x64.tar.gz -C "$STAGE" .
 
       - name: Upload Linux Directory Artifacts
