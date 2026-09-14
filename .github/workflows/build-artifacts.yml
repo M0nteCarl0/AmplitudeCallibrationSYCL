@@ -22,27 +22,19 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      - name: Cache Intel oneAPI installation
-        id: cache-oneapi
-        uses: actions/cache@v4
+      - name: Install Intel oneAPI DPC++ Compiler
+        uses: intel-oneapi-setup-actions/setup-oneapi@v1
         with:
-          path: |
-            C:\Program Files (x86)\Intel\oneAPI
-          key: ${{ runner.os }}-oneapi-2024
-
-      - name: Install Intel oneAPI Base Toolkit (if not cached)
-        if: steps.cache-oneapi.outputs.cache-hit != 'true'
-        shell: powershell
-        run: |
-          Write-Host "Installing Intel oneAPI via winget..."
-          winget install --id Intel.OneAPI.BaseToolkit --accept-package-agreements --accept-source-agreements --silent --disable-interactivity
+          components: |
+            intel-oneapi-compiler-dpcpp-cpp
+            intel-oneapi-compiler-shared-runtime-libs
 
       - name: Configure oneAPI environment variables
         shell: powershell
         run: |
           $setvarsPaths = @(
             "C:\Program Files (x86)\Intel\oneAPI\setvars.bat",
-            "D:\Program Files (x86)\Intel\oneAPI\setvars.bat"
+            "C:\Program Files\Intel\oneAPI\setvars.bat"
           )
           $setvars = $setvarsPaths | Where-Object { Test-Path $_ } | Select-Object -First 1
           if ($setvars) {
@@ -61,11 +53,8 @@ jobs:
               }
             }
           } else {
-            Write-Warning "setvars.bat not found; falling back to default PATH."
-            $defaultBin = "C:\Program Files (x86)\Intel\oneAPI\compiler\latest\bin"
-            if (Test-Path $defaultBin) {
-              Add-Content -Path $env:GITHUB_PATH -Value $defaultBin
-            }
+            Write-Error "setvars.bat was not found in expected installation locations."
+            exit 1
           }
 
       - name: Build Solution with MSBuild (Release x64)
