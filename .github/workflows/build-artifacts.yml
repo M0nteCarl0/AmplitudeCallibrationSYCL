@@ -113,6 +113,105 @@ jobs:
             exit 1
           }
 
+          # 1. Locate Intel oneAPI compiler directory and bundle all SYCL runtime DLLs
+          $oneApiBin = ""
+          $searchRoots = @(
+            "C:\Program Files (x86)\Intel\oneAPI",
+            "C:\Program Files\Intel\oneAPI",
+            "D:\Program Files (x86)\Intel\oneAPI",
+            "D:\Program Files\Intel\oneAPI"
+          )
+
+          foreach ($root in $searchRoots) {
+            if (Test-Path $root) {
+              $found = Get-ChildItem -Path $root -Filter "sycl*.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($found) {
+                $oneApiBin = $found.DirectoryName
+                break
+              }
+            }
+          }
+
+          if (-not $oneApiBin) {
+            $icxCmd = Get-Command icx -ErrorAction SilentlyContinue
+            if ($icxCmd) {
+              $oneApiBin = Split-Path $icxCmd.Source
+            }
+          }
+
+          Write-Host "Found oneAPI bin directory: $oneApiBin"
+
+          if ($oneApiBin) {
+            $dllPatterns = @(
+              "sycl*.dll",
+              "ur_*.dll",
+              "pi_*.dll",
+              "libmmd*.dll",
+              "svml_dispmd*.dll",
+              "libiomp*.dll",
+              "libirng*.dll",
+              "OpenCL.dll",
+              "xptifw.dll",
+              "qkmalloc.dll",
+              "omptarget*.dll"
+            )
+
+            foreach ($pat in $dllPatterns) {
+              Get-ChildItem -Path $oneApiBin -Filter $pat -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                  Copy-Item $_.FullName "$stageDir/bin" -Force
+                  Write-Host "Bundled Intel runtime DLL: $($_.Name)"
+                }
+            }
+
+            # Bundle Intel import libraries for SDK consumers
+            $oneApiLib = Join-Path (Split-Path $oneApiBin) "lib"
+            if (Test-Path $oneApiLib) {
+              Get-ChildItem -Path $oneApiLib -Include sycl*.lib,libmmd*.lib,OpenCL.lib -Recurse -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                  Copy-Item $_.FullName "$stageDir/lib" -Force
+                  Write-Host "Bundled Intel import LIB: $($_.Name)"
+                }
+            }
+          } else {
+            Write-Warning "Intel oneAPI bin directory not found!"
+          }
+
+          # 2. Bundle MSVC runtime DLLs
+          $msvcDlls = @(
+            "msvcp140.dll",
+            "msvcp140_1.dll",
+            "msvcp140_2.dll",
+            "msvcp140_atomic_wait.dll",
+            "msvcp140_codecvt_ids.dll",
+            "vcruntime140.dll",
+            "vcruntime140_1.dll",
+            "vcruntime140_threads.dll",
+            "concrt140.dll",
+            "vcomp140.dll"
+          )
+
+          foreach ($dll in $msvcDlls) {
+            $sysPath = Join-Path $env:WINDIR "System32\$dll"
+            if (Test-Path $sysPath) {
+              Copy-Item $sysPath "$stageDir/bin" -Force
+            }
+          }
+
+          # 3. Create run.bat launcher in release root
+          $runBat = "@echo off`r`nsetlocal`r`nset `"DIR=%~dp0`"`r`n`"%DIR%bin\AmplitudeCallibrationSYCL.exe`" %*`r`n"
+          [IO.File]::WriteAllText((Join-Path (Resolve-Path $stageDir) "run.bat"), $runBat)
+
+          Write-Host "`nStaged files in bin/:"
+          Get-ChildItem "$stageDir/bin" | Select-Object Name, Length | Format-Table -AutoSize
+
+          Write-Host "`nVerifying staged standalone binary:"
+          & "$stageDir/bin/AmplitudeCallibrationSYCL.exe" --help
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Staged binary execution test failed with exit code $LASTEXITCODE"
+            exit 1
+          }
+
           Compress-Archive -Path "$stageDir/*" -DestinationPath "artifacts/sycl-imageprocess-windows-x64.zip" -Force
 
       - name: Upload Windows Directory Artifacts
@@ -153,7 +252,7 @@ jobs:
           wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor | sudo tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null
           echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | sudo tee /etc/apt/sources.list.d/oneAPI.list
           sudo apt-get update -o Dir::Etc::sourcelist="sources.list.d/oneAPI.list" -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0"
-          sudo apt-get install -y --no-install-recommends ninja-build intel-oneapi-compiler-dpcpp-cpp intel-oneapi-runtime-libs
+          sudo apt-get install -y --no-install-recommends ninja-build patchelf intel-oneapi-compiler-dpcpp-cpp intel-oneapi-runtime-libs
 
       - name: Configure and Build with CMake & Ninja
         run: |
@@ -169,10 +268,60 @@ jobs:
         run: |
           STAGE="artifacts/sycl-imageprocess-linux-x64"
           mkdir -p "$STAGE/bin" "$STAGE/lib" "$STAGE/include"
+
+          # 1. Copy built executables and library
           find build -type f \( -name 'AmplitudeCallibrationSYCL' -o -name 'SimpleExample' \) -exec cp {} "$STAGE/bin/" \; || true
           find build -type f \( -name '*.so' -o -name '*.a' \) -exec cp {} "$STAGE/lib/" \; || true
+
+          # 2. Copy headers and docs
           cp -r include/sycl_ip "$STAGE/include/" 2>/dev/null || cp -r include "$STAGE/include/" 2>/dev/null || true
           cp README.md LICENSE "$STAGE/" 2>/dev/null || true
+
+          # 3. Copy Intel oneAPI SYCL and math runtimes from /opt/intel
+          for pattern in 'libsycl*.so*' 'libur_*.so*' 'libpi_*.so*' 'libimf.so*' 'libsvml.so*' 'libirng.so*' 'libintlc.so*' 'libiomp5.so*' 'libOpenCL.so*' 'libxpti*.so*'; do
+            find /opt/intel -name "$pattern" -exec cp -a -u {} "$STAGE/lib/" \; 2>/dev/null || true
+          done
+
+          # 4. Resolve runtime dependencies via ldd
+          for bin in "$STAGE/bin"/* "$STAGE/lib"/*.so*; do
+            if [ -f "$bin" ]; then
+              ldd "$bin" 2>/dev/null | grep '=>' | awk '{print $3}' | grep -v '^$' | while read dep; do
+                if [[ "$dep" == /opt/intel/* ]] || [[ "$dep" == *sycl* ]] || [[ "$dep" == *svml* ]] || [[ "$dep" == *imf* ]] || [[ "$dep" == *irng* ]] || [[ "$dep" == *intlc* ]] || [[ "$dep" == *iomp* ]] || [[ "$dep" == *ur_* ]] || [[ "$dep" == *pi_* ]] || [[ "$dep" == *OpenCL* ]]; then
+                  cp -a -u "$dep"* "$STAGE/lib/" 2>/dev/null || true
+                fi
+              done
+            fi
+          done
+
+          # 5. Set RPATH on all binaries and shared libraries so they locate $STAGE/lib
+          for bin in "$STAGE/bin"/*; do
+            if [ -f "$bin" ] && [ -x "$bin" ]; then
+              patchelf --set-rpath '$ORIGIN/../lib:$ORIGIN' "$bin" 2>/dev/null || true
+            fi
+          done
+          for lib in "$STAGE/lib"/*.so*; do
+            if [ -f "$lib" ]; then
+              patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib' "$lib" 2>/dev/null || true
+            fi
+          done
+
+          # 6. Create run.sh launcher script in root
+          cat << 'EOF' > "$STAGE/run.sh"
+          #!/bin/bash
+          DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          export LD_LIBRARY_PATH="$DIR/lib:${LD_LIBRARY_PATH:-}"
+          if [ $# -eq 0 ]; then
+              exec "$DIR/bin/AmplitudeCallibrationSYCL" --help
+          else
+              exec "$DIR/bin/AmplitudeCallibrationSYCL" "$@"
+          fi
+          EOF
+          chmod +x "$STAGE/run.sh" "$STAGE/bin/"*
+
+          # 7. Test standalone execution
+          echo "Verifying staged Linux binary..."
+          LD_LIBRARY_PATH="$STAGE/lib" "$STAGE/bin/AmplitudeCallibrationSYCL" --help
+
           tar -czvf artifacts/sycl-imageprocess-linux-x64.tar.gz -C "$STAGE" .
 
       - name: Upload Linux Directory Artifacts
