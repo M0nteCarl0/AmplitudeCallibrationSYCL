@@ -41,3 +41,5 @@ ProcessedImage*.flr
 AmplitudeCallibrationSYCL/490_kV/
 AmplitudeCallibrationSYCL/RawImage.flr
 *.flr
+*.dcm
+490_kV_DICOM/

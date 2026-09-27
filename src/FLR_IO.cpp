@@ -1,5 +1,30 @@
 #include "sycl_ip/FLR_IO.hpp"
+#include "sycl_ip/DICOM_IO.hpp"
 #include <cstring>
+#include <algorithm>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+static std::string pathToUtf8(const std::filesystem::path& p) {
+    const std::wstring& ws = p.native();
+    if (ws.empty()) return {};
+    int size = WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), static_cast<int>(ws.size()), nullptr, 0, nullptr, nullptr);
+    if (size <= 0) return {};
+    std::string s(size, 0);
+    WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), static_cast<int>(ws.size()), &s[0], size, nullptr, nullptr);
+    return s;
+}
+#else
+static std::string pathToUtf8(const std::filesystem::path& p) {
+    return p.u8string();
+}
+#endif
 
 namespace sycl_ip {
 
@@ -35,6 +60,12 @@ void FLRImage::resize(uint16_t width, uint16_t height) {
 }
 
 bool FLRImage::load(const std::filesystem::path& filePath) {
+    std::string ext = pathToUtf8(filePath.extension());
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    if (ext == ".dcm" || ext == ".dicom" || DICOM_IO::isDICOM(filePath)) {
+        return loadDICOM(filePath);
+    }
+
     std::ifstream file(filePath, std::ios::binary);
     if (!file.is_open()) {
         std::cerr << "[FLRImage] Error: Cannot open file: " << filePath.u8string() << "\n";
@@ -69,19 +100,57 @@ bool FLRImage::load(const std::filesystem::path& filePath) {
     return true;
 }
 
+bool FLRImage::loadDICOM(const std::filesystem::path& filePath) {
+    DICOMMetadata meta;
+    uint16_t w = 0, h = 0;
+    if (!DICOM_IO::load(filePath, m_pixels, w, h, meta)) {
+        return false;
+    }
+    m_header.type = FLR_MARKER;
+    m_header.width = w;
+    m_header.height = h;
+    m_header.bpp = 16;
+    m_header.bitsOffset = 0;
+    m_loadedPath = filePath;
+    return true;
+}
+
+bool FLRImage::saveDICOM(const std::filesystem::path& filePath) const {
+    if (m_pixels.empty() || m_header.width == 0 || m_header.height == 0) {
+        std::cerr << "[FLRImage] Error: Empty image buffer for saving DICOM to " << pathToUtf8(filePath) << "\n";
+        return false;
+    }
+    DICOMMetadata meta;
+    meta.seriesDescription = pathToUtf8(filePath.stem());
+    return DICOM_IO::save(filePath, m_pixels.data(), m_header.width, m_header.height, meta);
+}
+
 bool FLRImage::save(const std::filesystem::path& filePath) const {
+    std::string ext = pathToUtf8(filePath.extension());
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    if (ext == ".dcm" || ext == ".dicom") {
+        return saveDICOM(filePath);
+    }
     return save(filePath, m_pixels.data(), m_header.width, m_header.height);
 }
 
 bool FLRImage::save(const std::filesystem::path& filePath, const uint16_t* customData, uint16_t width, uint16_t height) const {
     if (!customData || width == 0 || height == 0) {
-        std::cerr << "[FLRImage] Error: Invalid data or dimensions for saving to " << filePath.u8string() << "\n";
+        std::cerr << "[FLRImage] Error: Invalid data or dimensions for saving to " << pathToUtf8(filePath) << "\n";
         return false;
+    }
+
+    std::string ext = pathToUtf8(filePath.extension());
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    if (ext == ".dcm" || ext == ".dicom") {
+        DICOMMetadata meta;
+        meta.seriesDescription = pathToUtf8(filePath.stem());
+        return DICOM_IO::save(filePath, customData, width, height, meta);
     }
 
     std::ofstream file(filePath, std::ios::binary);
     if (!file.is_open()) {
-        std::cerr << "[FLRImage] Error: Cannot open destination file: " << filePath.u8string() << "\n";
+        std::cerr << "[FLRImage] Error: Cannot open destination file: " << pathToUtf8(filePath) << "\n";
         return false;
     }
 

@@ -52,6 +52,9 @@ public:
     bool save(const std::filesystem::path& filePath) const;
     bool save(const std::filesystem::path& filePath, const uint16_t* customData, uint16_t width, uint16_t height) const;
 
+    bool loadDICOM(const std::filesystem::path& filePath);
+    bool saveDICOM(const std::filesystem::path& filePath) const;
+
     void resize(uint16_t width, uint16_t height);
     void clear();
 

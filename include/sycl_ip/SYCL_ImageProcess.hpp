@@ -19,4 +19,5 @@
 #include "SYCL_Filters.hpp"
 #include "SYCL_Suppress.hpp"
 #include "SYCL_Transforms.hpp"
+#include "DICOM_IO.hpp"
 #include "SYCL_Pipeline.hpp"

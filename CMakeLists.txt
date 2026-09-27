@@ -32,12 +32,14 @@ set(SYCL_IP_HEADERS
     include/sycl_ip/SYCL_Filters.hpp
     include/sycl_ip/SYCL_Suppress.hpp
     include/sycl_ip/SYCL_Transforms.hpp
+    include/sycl_ip/DICOM_IO.hpp
     include/sycl_ip/SYCL_Pipeline.hpp
 )
 
 set(SYCL_IP_SOURCES
     src/SYCLContext.cpp
     src/FLR_IO.cpp
+    src/DICOM_IO.cpp
     src/SYCL_Statistics.cpp
     src/SYCL_Average.cpp
     src/SYCL_Calibrate.cpp

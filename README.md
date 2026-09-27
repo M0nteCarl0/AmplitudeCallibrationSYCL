@@ -1,11 +1,12 @@
 # SYCL Amplitude Calibration & Image Processing
 
 [![Build and Package Artifacts](https://github.com/M0nteCarl0/AmplitudeCallibrationSYCL/actions/workflows/build-artifacts.yml/badge.svg)](https://github.com/M0nteCarl0/AmplitudeCallibrationSYCL/actions/workflows/build-artifacts.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/M0nteCarl0/AmplitudeCallibrationSYCL)](https://github.com/M0nteCarl0/AmplitudeCallibrationSYCL/releases)
 [![License: Custom Attribution](https://img.shields.io/badge/License-Attribution%20Required-blue.svg)](LICENSE)
 [![SYCL](https://img.shields.io/badge/SYCL-2020%20%2F%20DPC%2B%2B-orange.svg)](https://www.intel.com/content/www/us/en/developer/tools/oneapi/overview.html)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-lightgrey.svg)](docs/environment_setup.md)
 
-High-performance, modular C++ library powered by **SYCL / DPC++ (Intel oneAPI)** for parallel 16-bit X-ray and optical detector image processing (`.flr`) and amplitude calibration across **GPUs** (Intel Iris Xe, Arc, Data Center GPU) and multi-core **CPUs** (Intel Core / Xeon).
+High-performance, modular C++ library powered by **SYCL / DPC++ (Intel oneAPI)** for parallel 16-bit X-ray and optical detector image processing (`.flr`, `.dcm` DICOM Part 10) and amplitude calibration across **GPUs** (Intel Iris Xe, Arc, Data Center GPU) and multi-core **CPUs** (Intel Core / Xeon).
 
 ---
 
@@ -13,8 +14,9 @@ High-performance, modular C++ library powered by **SYCL / DPC++ (Intel oneAPI)**
 
 - **Heterogeneous Acceleration:** Unified single-source SYCL kernels executing on Intel GPUs (Level-Zero / OpenCL) and multi-core CPUs.
 - **Detector Amplitude Calibration:** Fast parallel linear regression across 11+ million detector pixels with Integral Non-Linearity (INL) table generation.
-- **16-bit Image Processing:** Fused Mean/RMS reductions, separable 2D Box Blur, ring-aperture spike & cosmic ray suppression, and geometric transforms.
+- **16-bit Image Processing & Formats:** Fused Mean/RMS reductions, separable 2D Box Blur, ring-aperture spike & cosmic ray suppression, geometric transforms, native FLR and DICOM Part 10 IO / batch conversion.
 - **High Throughput:** Up to **480+ FPS** (9.9 GB/s) for statistical reductions and **330+ FPS** for spike defect suppression on integrated Intel Iris Xe.
+
 
 ---
 

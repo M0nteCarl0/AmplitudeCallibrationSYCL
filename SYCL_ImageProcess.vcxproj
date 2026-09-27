@@ -107,11 +107,13 @@
     <ClInclude Include="include\sycl_ip\SYCL_Filters.hpp" />
     <ClInclude Include="include\sycl_ip\SYCL_Suppress.hpp" />
     <ClInclude Include="include\sycl_ip\SYCL_Transforms.hpp" />
+    <ClInclude Include="include\sycl_ip\DICOM_IO.hpp" />
     <ClInclude Include="include\sycl_ip\SYCL_Pipeline.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\SYCLContext.cpp" />
     <ClCompile Include="src\FLR_IO.cpp" />
+    <ClCompile Include="src\DICOM_IO.cpp" />
     <ClCompile Include="src\SYCL_Statistics.cpp" />
     <ClCompile Include="src\SYCL_Average.cpp" />
     <ClCompile Include="src\SYCL_Calibrate.cpp" />

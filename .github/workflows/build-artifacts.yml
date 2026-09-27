@@ -7,6 +7,12 @@ on:
   pull_request:
     branches: [ main ]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag (e.g. v1.0.0). If specified, publishes a GitHub Release.'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: write
@@ -186,27 +192,29 @@ jobs:
   release:
     name: Publish GitHub Release
     needs: [build-windows, build-linux]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
     runs-on: ubuntu-latest
     steps:
       - name: Download Windows Zip Package
         uses: actions/download-artifact@v4
         with:
           name: sycl-imageprocess-windows-x64-zip
-          path: release-assets
+          path: release-assets-win
 
       - name: Download Linux Tarball Package
         uses: actions/download-artifact@v4
         with:
           name: sycl-imageprocess-linux-x64-tarball
-          path: release-assets
+          path: release-assets-linux
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
+          name: Release ${{ inputs.release_tag || github.ref_name }}
           files: |
-            release-assets/sycl-imageprocess-windows-x64.zip
-            release-assets/sycl-imageprocess-linux-x64.tar.gz
+            release-assets-win/sycl-imageprocess-windows-x64.zip
+            release-assets-linux/sycl-imageprocess-linux-x64.tar.gz
           draft: false
           prerelease: false
-          generate_release_notes: true
+          generate_release_notes: true

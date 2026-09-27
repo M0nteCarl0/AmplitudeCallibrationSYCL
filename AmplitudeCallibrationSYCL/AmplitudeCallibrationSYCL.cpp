@@ -19,6 +19,12 @@ void printUsage(const char* progName) {
     std::cout << "  --calibrate <dir>          Fit amplitude calibration model from averaged dataset\n";
     std::cout << "  --repair <in.flr> <out.flr> [calib.fit]\n";
     std::cout << "                             Calibrate / repair raw FLR image using calibration model\n";
+    std::cout << "  --flr2dcm <in.flr> <out.dcm> [kvp]\n";
+    std::cout << "                             Convert 16-bit FLR image to standard DICOM Part 10\n";
+    std::cout << "  --dcm2flr <in.dcm> <out.flr>\n";
+    std::cout << "                             Convert DICOM Part 10 image back to 16-bit FLR format\n";
+    std::cout << "  --convert-dir <srcDir> <dstDir> [--to-flr] [kvp]\n";
+    std::cout << "                             Batch convert directory between FLR and DICOM\n";
     std::cout << "  --all                      Run tests on GPU & CPU, benchmarks, and dataset pipeline\n";
     std::cout << "  --help                     Show this help message\n\n";
 }
@@ -34,6 +40,12 @@ int main(int argc, char** argv) {
     std::string averageDir = "";
     std::string calibrateDir = "";
     std::string repairIn = "", repairOut = "", repairModel = "";
+    std::string flr2dcmIn = "", flr2dcmOut = "";
+    float flr2dcmKvp = 0.0f;
+    std::string dcm2flrIn = "", dcm2flrOut = "";
+    std::string convertDirSrc = "", convertDirDst = "";
+    bool convertFlrToDcm = true;
+    float convertKvp = 0.0f;
 
     if (argc <= 1) {
         // Default mode: run complete self-test, benchmark, and dataset processing
@@ -62,11 +74,47 @@ int main(int argc, char** argv) {
                 if (i + 1 < argc && argv[i + 1][0] != '-') {
                     repairModel = argv[++i];
                 }
+            } else if (arg == "--flr2dcm" && i + 2 < argc) {
+                flr2dcmIn = argv[++i];
+                flr2dcmOut = argv[++i];
+                if (i + 1 < argc && argv[i + 1][0] != '-') {
+                    try { flr2dcmKvp = std::stof(argv[++i]); } catch (...) {}
+                }
+            } else if (arg == "--dcm2flr" && i + 2 < argc) {
+                dcm2flrIn = argv[++i];
+                dcm2flrOut = argv[++i];
+            } else if (arg == "--convert-dir" && i + 2 < argc) {
+                convertDirSrc = argv[++i];
+                convertDirDst = argv[++i];
+                while (i + 1 < argc && argv[i + 1][0] == '-') {
+                    std::string opt = argv[++i];
+                    if (opt == "--to-flr") convertFlrToDcm = false;
+                }
+                if (i + 1 < argc && argv[i + 1][0] != '-') {
+                    try { convertKvp = std::stof(argv[++i]); } catch (...) {}
+                }
             } else if (arg == "--help" || arg == "-h") {
                 printUsage(argv[0]);
                 return 0;
             }
         }
+    }
+
+    if (!flr2dcmIn.empty()) {
+        DICOMMetadata meta;
+        if (flr2dcmKvp > 0.0f) meta.kvp = flr2dcmKvp;
+        bool ok = DICOM_IO::convertFLRtoDICOM(flr2dcmIn, flr2dcmOut, meta);
+        return ok ? 0 : 1;
+    }
+
+    if (!dcm2flrIn.empty()) {
+        bool ok = DICOM_IO::convertDICOMtoFLR(dcm2flrIn, dcm2flrOut);
+        return ok ? 0 : 1;
+    }
+
+    if (!convertDirSrc.empty()) {
+        int count = DICOM_IO::convertDirectory(convertDirSrc, convertDirDst, convertFlrToDcm, convertKvp);
+        return (count > 0) ? 0 : 1;
     }
 
     // List available platforms and devices
