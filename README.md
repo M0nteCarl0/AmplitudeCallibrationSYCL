@@ -3,7 +3,6 @@
 [![Build and Package Artifacts](https://github.com/M0nteCarl0/AmplitudeCallibrationSYCL/actions/workflows/build-artifacts.yml/badge.svg)](https://github.com/M0nteCarl0/AmplitudeCallibrationSYCL/actions/workflows/build-artifacts.yml)
 [![GitHub Release](https://img.shields.io/github/v/release/M0nteCarl0/AmplitudeCallibrationSYCL)](https://github.com/M0nteCarl0/AmplitudeCallibrationSYCL/releases)
 [![GitHub Downloads](https://img.shields.io/github/downloads/M0nteCarl0/AmplitudeCallibrationSYCL/total?color=blue)](https://github.com/M0nteCarl0/AmplitudeCallibrationSYCL/releases)
-[![Clones](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FM0nteCarl0%2FAmplitudeCallibrationSYCL%2Ftraffic%2Fclones.json)](docs/clone_statistics.md)
 [![License: Custom Attribution](https://img.shields.io/badge/License-Attribution%20Required-blue.svg)](LICENSE)
 [![SYCL](https://img.shields.io/badge/SYCL-2020%20%2F%20DPC%2B%2B-orange.svg)](https://www.intel.com/content/www/us/en/developer/tools/oneapi/overview.html)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-lightgrey.svg)](docs/environment_setup.md)
@@ -96,7 +95,6 @@ cmake --build build --config Release
 - 📖 **[Class & API Reference](docs/api_reference.md)** — Detailed descriptions of all classes, methods, and structures.
 - ⚙️ **[Environment & Prerequisites Guide](docs/environment_setup.md)** — Hardware drivers, Intel oneAPI, and toolchain installation for Windows and Linux.
 - 🧪 **[Validation & Benchmark Suite](run_all.bat)** — Pre-configured test scripts ([`run_gpu_test.bat`](run_gpu_test.bat), [`run_cpu_test.bat`](run_cpu_test.bat), [`run_benchmarks.bat`](run_benchmarks.bat)).
-- 📈 **[Clone Statistics Badge](docs/clone_statistics.md)** — How the lifetime clones counter is collected and published to the `traffic` branch.
 
 ---
 
