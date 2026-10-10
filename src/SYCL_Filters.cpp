@@ -4,55 +4,71 @@
 
 namespace sycl_ip {
 
-bool SYCL_Filters::smooth(SYCLContext& ctx, const uint16_t* d_in, uint16_t* d_out, int width, int height, int radiusK) {
+bool SYCL_Filters::smooth(SYCLContext& ctx, const uint16_t* d_in, uint16_t* d_out, int width, int height, int radiusK, uint16_t* d_temp) {
     if (!d_in || !d_out || width <= 0 || height <= 0 || radiusK <= 0) return false;
 
     size_t total = static_cast<size_t>(width) * height;
     auto& q = ctx.getQueue();
-    uint16_t* d_temp = ctx.allocateDevice<uint16_t>(total);
+    bool ownTemp = (d_temp == nullptr);
+    uint16_t* tempBuf = ownTemp ? ctx.allocateDevice<uint16_t>(total) : d_temp;
 
     int winSize = 2 * radiusK + 1;
     float invWin = 1.0f / static_cast<float>(winSize);
 
-    // Pass 1: Horizontal 1D Blur
-    q.parallel_for(sycl::range<2>(height, width), [=](sycl::id<2> id) {
-        int y = static_cast<int>(id[0]);
-        int x = static_cast<int>(id[1]);
+    constexpr size_t WG_X = 256;
+    size_t numWG_X = (width + WG_X - 1) / WG_X;
+    sycl::range<2> globalRange(height, numWG_X * WG_X);
+    sycl::range<2> localRange(1, WG_X);
 
-        int sum = 0;
-        for (int k = -radiusK; k <= radiusK; ++k) {
-            int cx = x + k;
-            if (cx < 0) cx = -cx;
-            else if (cx >= width) cx = 2 * width - cx - 1;
-            if (cx < 0) cx = 0;
-            if (cx >= width) cx = width - 1;
+    // Pass 1: Horizontal 1D Blur (100% coalesced 1D workgroups along X)
+    q.submit([&](sycl::handler& h) {
+        h.parallel_for(sycl::nd_range<2>(globalRange, localRange), [=](sycl::nd_item<2> it) {
+            int y = static_cast<int>(it.get_global_id(0));
+            int x = static_cast<int>(it.get_global_id(1));
+            if (x < width) {
+                int sum = 0;
+                for (int k = -radiusK; k <= radiusK; ++k) {
+                    int cx = x + k;
+                    if (cx < 0) cx = -cx;
+                    else if (cx >= width) cx = 2 * width - cx - 1;
+                    if (cx < 0) cx = 0;
+                    if (cx >= width) cx = width - 1;
 
-            sum += static_cast<int>(d_in[y * width + cx]);
-        }
-        float val = static_cast<float>(sum) * invWin;
-        d_temp[y * width + x] = static_cast<uint16_t>(sycl::clamp(val + 0.5f, 0.0f, 65535.0f));
-    }).wait();
+                    sum += static_cast<int>(d_in[y * width + cx]);
+                }
+                float val = static_cast<float>(sum) * invWin;
+                tempBuf[y * width + x] = static_cast<uint16_t>(sycl::clamp(val + 0.5f, 0.0f, 65535.0f));
+            }
+        });
+    });
 
-    // Pass 2: Vertical 1D Blur
-    q.parallel_for(sycl::range<2>(height, width), [=](sycl::id<2> id) {
-        int y = static_cast<int>(id[0]);
-        int x = static_cast<int>(id[1]);
+    // Pass 2: Vertical 1D Blur (100% coalesced 1D workgroups along X)
+    q.submit([&](sycl::handler& h) {
+        h.parallel_for(sycl::nd_range<2>(globalRange, localRange), [=](sycl::nd_item<2> it) {
+            int y = static_cast<int>(it.get_global_id(0));
+            int x = static_cast<int>(it.get_global_id(1));
+            if (x < width) {
+                int sum = 0;
+                for (int k = -radiusK; k <= radiusK; ++k) {
+                    int cy = y + k;
+                    if (cy < 0) cy = -cy;
+                    else if (cy >= height) cy = 2 * height - cy - 1;
+                    if (cy < 0) cy = 0;
+                    if (cy >= height) cy = height - 1;
 
-        int sum = 0;
-        for (int k = -radiusK; k <= radiusK; ++k) {
-            int cy = y + k;
-            if (cy < 0) cy = -cy;
-            else if (cy >= height) cy = 2 * height - cy - 1;
-            if (cy < 0) cy = 0;
-            if (cy >= height) cy = height - 1;
+                    sum += static_cast<int>(tempBuf[cy * width + x]);
+                }
+                float val = static_cast<float>(sum) * invWin;
+                d_out[y * width + x] = static_cast<uint16_t>(sycl::clamp(val + 0.5f, 0.0f, 65535.0f));
+            }
+        });
+    });
 
-            sum += static_cast<int>(d_temp[cy * width + x]);
-        }
-        float val = static_cast<float>(sum) * invWin;
-        d_out[y * width + x] = static_cast<uint16_t>(sycl::clamp(val + 0.5f, 0.0f, 65535.0f));
-    }).wait();
+    q.wait();
 
-    ctx.free<uint16_t>(d_temp);
+    if (ownTemp) {
+        ctx.free<uint16_t>(tempBuf);
+    }
     return true;
 }
 

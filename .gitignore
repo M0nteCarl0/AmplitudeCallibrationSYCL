@@ -43,3 +43,7 @@ AmplitudeCallibrationSYCL/RawImage.flr
 *.flr
 *.dcm
 490_kV_DICOM/
+
+# Python cache
+__pycache__/
+*.pyc

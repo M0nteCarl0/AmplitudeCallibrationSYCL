@@ -16,22 +16,84 @@ SYCL_Average::SYCL_Average(int width, int height)
 }
 
 void SYCL_Average::accumulate(SYCLContext& ctx, uint32_t* d_accum, const uint16_t* d_in, size_t count) {
+    if (!d_accum || !d_in || count == 0) return;
     auto& q = ctx.getQueue();
-    q.parallel_for(sycl::range<1>(count), [=](sycl::id<1> idx) {
-        d_accum[idx] += static_cast<uint32_t>(d_in[idx]);
-    }).wait();
+
+    constexpr size_t VEC = 4;
+    size_t vecCount = count / VEC;
+    size_t remainder = count % VEC;
+    constexpr size_t WG = 256;
+    size_t numWG = (vecCount + WG - 1) / WG;
+
+    if (vecCount > 0) {
+        q.submit([&](sycl::handler& h) {
+            h.parallel_for(sycl::nd_range<1>(numWG * WG, WG), [=](sycl::nd_item<1> it) {
+                size_t idx = it.get_global_id(0);
+                if (idx < vecCount) {
+                    auto inV = reinterpret_cast<const sycl::vec<uint16_t, VEC>*>(d_in)[idx];
+                    auto* accPtr = reinterpret_cast<sycl::vec<uint32_t, VEC>*>(d_accum) + idx;
+                    auto a = *accPtr;
+
+                    a[0] += static_cast<uint32_t>(inV[0]);
+                    a[1] += static_cast<uint32_t>(inV[1]);
+                    a[2] += static_cast<uint32_t>(inV[2]);
+                    a[3] += static_cast<uint32_t>(inV[3]);
+
+                    *accPtr = a;
+                }
+            });
+        });
+    }
+
+    if (remainder > 0) {
+        size_t off = vecCount * VEC;
+        q.parallel_for(sycl::range<1>(remainder), [=](sycl::id<1> id) {
+            d_accum[off + id] += static_cast<uint32_t>(d_in[off + id]);
+        });
+    }
+
+    q.wait();
 }
 
 void SYCL_Average::normalize(SYCLContext& ctx, const uint32_t* d_accum, uint16_t* d_out, size_t count, int numImages) {
-    if (numImages <= 0) return;
+    if (!d_accum || !d_out || count == 0 || numImages <= 0) return;
     float invCount = 1.0f / static_cast<float>(numImages);
     auto& q = ctx.getQueue();
 
-    q.parallel_for(sycl::range<1>(count), [=](sycl::id<1> idx) {
-        float val = static_cast<float>(d_accum[idx]) * invCount;
-        val = sycl::clamp(val + 0.5f, 0.0f, 65535.0f);
-        d_out[idx] = static_cast<uint16_t>(val);
-    }).wait();
+    constexpr size_t VEC = 4;
+    size_t vecCount = count / VEC;
+    size_t remainder = count % VEC;
+    constexpr size_t WG = 256;
+    size_t numWG = (vecCount + WG - 1) / WG;
+
+    if (vecCount > 0) {
+        q.submit([&](sycl::handler& h) {
+            h.parallel_for(sycl::nd_range<1>(numWG * WG, WG), [=](sycl::nd_item<1> it) {
+                size_t idx = it.get_global_id(0);
+                if (idx < vecCount) {
+                    auto a = reinterpret_cast<const sycl::vec<uint32_t, VEC>*>(d_accum)[idx];
+                    sycl::vec<uint16_t, VEC> outV;
+                    #pragma unroll
+                    for (int k = 0; k < 4; ++k) {
+                        float v = static_cast<float>(a[k]) * invCount;
+                        outV[k] = static_cast<uint16_t>(sycl::clamp(v + 0.5f, 0.0f, 65535.0f));
+                    }
+                    reinterpret_cast<sycl::vec<uint16_t, VEC>*>(d_out)[idx] = outV;
+                }
+            });
+        });
+    }
+
+    if (remainder > 0) {
+        size_t off = vecCount * VEC;
+        q.parallel_for(sycl::range<1>(remainder), [=](sycl::id<1> id) {
+            float val = static_cast<float>(d_accum[off + id]) * invCount;
+            val = sycl::clamp(val + 0.5f, 0.0f, 65535.0f);
+            d_out[off + id] = static_cast<uint16_t>(val);
+        });
+    }
+
+    q.wait();
 }
 
 bool SYCL_Average::averageFileList(SYCLContext& ctx, const std::vector<fs::path>& fileList, const fs::path& outFlrPath, ExposureAverageResult& outResult) {

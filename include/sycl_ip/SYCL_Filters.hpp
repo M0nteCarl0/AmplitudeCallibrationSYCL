@@ -10,7 +10,7 @@ namespace sycl_ip {
 class SYCL_IP_API SYCL_Filters {
 public:
     // 2D Separable Box Blur (Smooth)
-    static bool smooth(SYCLContext& ctx, const uint16_t* d_in, uint16_t* d_out, int width, int height, int radiusK = 2);
+    static bool smooth(SYCLContext& ctx, const uint16_t* d_in, uint16_t* d_out, int width, int height, int radiusK = 2, uint16_t* d_temp = nullptr);
 
     // Adaptive noise averaging filter (SYCL equivalent of legacy AdaptAverage)
     static bool adaptAverage(SYCLContext& ctx, 

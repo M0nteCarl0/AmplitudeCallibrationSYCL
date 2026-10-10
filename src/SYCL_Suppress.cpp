@@ -23,14 +23,21 @@ bool SYCL_Suppress::suppressSpikes(SYCLContext& ctx,
     float coeff1F = static_cast<float>(coeff1);
     float coeff2F = static_cast<float>(coeff2);
 
-    q.parallel_for(sycl::range<2>(height, width), [=](sycl::id<2> id) {
-        int y = static_cast<int>(id[0]);
-        int x = static_cast<int>(id[1]);
+    constexpr size_t WG_X = 256;
+    size_t numWG_X = (width + WG_X - 1) / WG_X;
+    sycl::range<2> globalRange(height, numWG_X * WG_X);
+    sycl::range<2> localRange(1, WG_X);
 
-        if (x < 3 || x >= width - 3 || y < 3 || y >= height - 3) {
-            d_out[y * width + x] = d_in[y * width + x];
-            return;
-        }
+    q.submit([&](sycl::handler& h) {
+        h.parallel_for(sycl::nd_range<2>(globalRange, localRange), [=](sycl::nd_item<2> it) {
+            int y = static_cast<int>(it.get_global_id(0));
+            int x = static_cast<int>(it.get_global_id(1));
+            if (x >= width) return;
+
+            if (x < 3 || x >= width - 3 || y < 3 || y >= height - 3) {
+                d_out[y * width + x] = d_in[y * width + x];
+                return;
+            }
 
         uint16_t A0 = d_in[y * width + x];
 
@@ -122,6 +129,7 @@ bool SYCL_Suppress::suppressSpikes(SYCLContext& ctx,
         }
 
         d_out[y * width + x] = outVal;
+        });
     }).wait();
 
     return true;

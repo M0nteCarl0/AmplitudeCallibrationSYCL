@@ -3,6 +3,7 @@
 [![Build and Package Artifacts](https://github.com/M0nteCarl0/AmplitudeCallibrationSYCL/actions/workflows/build-artifacts.yml/badge.svg)](https://github.com/M0nteCarl0/AmplitudeCallibrationSYCL/actions/workflows/build-artifacts.yml)
 [![GitHub Release](https://img.shields.io/github/v/release/M0nteCarl0/AmplitudeCallibrationSYCL)](https://github.com/M0nteCarl0/AmplitudeCallibrationSYCL/releases)
 [![GitHub Downloads](https://img.shields.io/github/downloads/M0nteCarl0/AmplitudeCallibrationSYCL/total?color=blue)](https://github.com/M0nteCarl0/AmplitudeCallibrationSYCL/releases)
+[![Clones](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FM0nteCarl0%2FAmplitudeCallibrationSYCL%2Ftraffic%2Fclones.json)](docs/clone_statistics.md)
 [![License: Custom Attribution](https://img.shields.io/badge/License-Attribution%20Required-blue.svg)](LICENSE)
 [![SYCL](https://img.shields.io/badge/SYCL-2020%20%2F%20DPC%2B%2B-orange.svg)](https://www.intel.com/content/www/us/en/developer/tools/oneapi/overview.html)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-lightgrey.svg)](docs/environment_setup.md)
@@ -16,7 +17,7 @@ High-performance, modular C++ library powered by **SYCL / DPC++ (Intel oneAPI)**
 - **Heterogeneous Acceleration:** Unified single-source SYCL kernels executing on Intel GPUs (Level-Zero / OpenCL) and multi-core CPUs.
 - **Detector Amplitude Calibration:** Fast parallel linear regression across 11+ million detector pixels with Integral Non-Linearity (INL) table generation.
 - **16-bit Image Processing & Formats:** Fused Mean/RMS reductions, separable 2D Box Blur, ring-aperture spike & cosmic ray suppression, geometric transforms, native FLR and DICOM Part 10 IO / batch conversion.
-- **High Throughput:** Up to **480+ FPS** (9.9 GB/s) for statistical reductions and **330+ FPS** for spike defect suppression on integrated Intel Iris Xe.
+- **High Throughput:** Up to **1,180+ FPS** (24.5 GB/s) for statistical reductions, **800+ FPS** (49.7 GB/s Mem BW) for frame subtraction, and **430+ FPS** (53.8 GB/s Mem BW) for calibration repair on integrated Intel Iris Xe.
 
 
 ---
@@ -64,11 +65,12 @@ Benchmarked on **Intel Iris Xe Graphics (96 EU)** vs **13th Gen Intel Core i9-13
 
 | Operation | GPU Time | GPU Throughput | CPU Time | Speedup |
 | :--- | :---: | :---: | :---: | :---: |
-| **Mean & RMS Reduction** | **2.07 ms** | **482 FPS** (9.96 GB/s) | 14.34 ms | **~6.9x** |
-| **Spike Noise Suppression** | **3.02 ms** | **330 FPS** | 70.94 ms | **~23.4x** |
-| **Calibration Model Repair** | **2.64 ms** | **378 FPS** (7.80 GB/s) | 3.34 ms | **~1.3x** |
-| **2D Box Blur Filter (5x5)** | **4.66 ms** | **214 FPS** (8.85 GB/s) | 12.79 ms | **~2.7x** |
-| **Image Accumulation** | **11.22 ms** | **89 FPS** (1.84 GB/s) | 20.80 ms | **~1.9x** |
+| **Mean & RMS Reduction** | **0.84 ms** | **1,187 FPS** (24.50 GB/s Mem BW) | 8.16 ms | **~9.7x** |
+| **Image Subtract** | **1.25 ms** | **803 FPS** (49.70 GB/s Mem BW) | 1.63 ms | **~1.3x** |
+| **Image Accumulation** | **2.09 ms** | **477 FPS** (49.27 GB/s Mem BW) | 2.60 ms | **~1.2x** |
+| **Calibration Model Repair** | **2.30 ms** | **434 FPS** (53.81 GB/s Mem BW) | 3.10 ms | **~1.3x** |
+| **2D Box Blur Filter (5x5)** | **2.84 ms** | **352 FPS** (29.11 GB/s Mem BW) | 11.62 ms | **~4.1x** |
+| **Spike Noise Suppression** | **3.02 ms** | **331 FPS** | 71.93 ms | **~23.8x** |
 
 ---
 
@@ -94,6 +96,7 @@ cmake --build build --config Release
 - 📖 **[Class & API Reference](docs/api_reference.md)** — Detailed descriptions of all classes, methods, and structures.
 - ⚙️ **[Environment & Prerequisites Guide](docs/environment_setup.md)** — Hardware drivers, Intel oneAPI, and toolchain installation for Windows and Linux.
 - 🧪 **[Validation & Benchmark Suite](run_all.bat)** — Pre-configured test scripts ([`run_gpu_test.bat`](run_gpu_test.bat), [`run_cpu_test.bat`](run_cpu_test.bat), [`run_benchmarks.bat`](run_benchmarks.bat)).
+- 📈 **[Clone Statistics Badge](docs/clone_statistics.md)** — How the lifetime clones counter is collected and published to the `traffic` branch.
 
 ---
 

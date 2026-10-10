@@ -1,0 +1,83 @@
+name: Clone Statistics
+
+# Accumulates GitHub clone traffic and publishes the lifetime counter to the
+# orphan `traffic` branch, where the README badge reads the generated
+# shields.io endpoint payload.
+#
+# The Traffic API keeps only the last 14 days and is readable only with push
+# access, so this workflow snapshots the window daily and merges it into a
+# never-shrinking per-day history. Counting starts on the first successful run;
+# earlier traffic cannot be recovered.
+#
+# One-time setup:
+#   1. Create a personal access token that can read the traffic endpoints and
+#      push to this repository:
+#        * classic token      -> `repo` scope
+#        * fine-grained token -> Contents: read/write + Administration: read
+#      The default GITHUB_TOKEN cannot read /traffic endpoints.
+#   2. Store it as the repository secret GH_TRAFFIC_TOKEN
+#      (Settings -> Secrets and variables -> Actions -> New repository secret).
+#   3. Run this workflow once: Actions -> Clone Statistics -> Run workflow.
+#
+# See docs/clone_statistics.md.
+
+on:
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clone-statistics
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Update traffic branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Collect and merge clone traffic
+        env:
+          GH_TRAFFIC_TOKEN: ${{ secrets.GH_TRAFFIC_TOKEN }}
+        run: python3 .github/scripts/update_clone_stats.py --output "$RUNNER_TEMP/stats"
+
+      - name: Publish traffic branch
+        env:
+          GH_TRAFFIC_TOKEN: ${{ secrets.GH_TRAFFIC_TOKEN }}
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/stats"
+
+          cat > "$stage/README.md" <<'EOF'
+          # Clone statistics (generated)
+
+          This orphan branch is written by the
+          [`Clone Statistics`](../blob/main/.github/workflows/clone-stats.yml)
+          workflow and force-pushed as a single fresh commit on every run — do
+          not edit it by hand.
+
+          | File | Purpose |
+          | :--- | :--- |
+          | [`clones.json`](clones.json) | shields.io endpoint payload rendered by the README badge |
+          | [`clones-daily.json`](clones-daily.json) | accumulated per-day history and lifetime totals |
+
+          Totals sum every day observed since the workflow was installed, because
+          the GitHub Traffic API retains only the last 14 days. Counts include
+          automated clones (bots, CI, mirrors).
+          EOF
+
+          cd "$stage"
+          git init -q -b traffic
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Keep the PAT out of the remote URL so it cannot leak into error output.
+          git config http.extraheader "AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TRAFFIC_TOKEN" | base64 -w0)"
+          git add -A
+          git commit -q -m "stats: clone traffic snapshot $(date -u +%Y-%m-%d)"
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git push -q --force origin traffic

@@ -21,14 +21,49 @@ double SYCL_Statistics::computeMean(SYCLContext& ctx, const uint16_t* d_image, i
     uint64_t* d_sum = ctx.allocateShared<uint64_t>(1);
     *d_sum = 0;
 
-    q.submit([&](sycl::handler& h) {
-        auto sum_reduction = sycl::reduction(d_sum, sycl::plus<uint64_t>());
-        h.parallel_for(sycl::range<2>(roiH, roiW), sum_reduction, [=](sycl::id<2> id, auto& sum_acc) {
-            int y = roiT + static_cast<int>(id[0]);
-            int x = roiL + static_cast<int>(id[1]);
-            sum_acc += static_cast<uint64_t>(d_image[y * width + x]);
+    bool isFull = (!roi || (roiL == 0 && roiT == 0 && roiW == width && roiH == height));
+    if (isFull) {
+        constexpr size_t VEC = 8;
+        size_t vecCount = totalPixels / VEC;
+        size_t remainder = totalPixels % VEC;
+        constexpr size_t WG = 256;
+        size_t numWG = (vecCount + WG - 1) / WG;
+
+        if (vecCount > 0) {
+            q.submit([&](sycl::handler& h) {
+                auto sum_reduction = sycl::reduction(d_sum, sycl::plus<uint64_t>());
+                h.parallel_for(sycl::nd_range<1>(numWG * WG, WG), sum_reduction, [=](sycl::nd_item<1> it, auto& sum_acc) {
+                    size_t idx = it.get_global_id(0);
+                    if (idx < vecCount) {
+                        auto inV = reinterpret_cast<const sycl::vec<uint16_t, VEC>*>(d_image)[idx];
+                        uint64_t localSum = 0;
+                        #pragma unroll
+                        for (int k = 0; k < 8; ++k) localSum += inV[k];
+                        sum_acc += localSum;
+                    }
+                });
+            });
+        }
+        if (remainder > 0) {
+            size_t off = vecCount * VEC;
+            q.submit([&](sycl::handler& h) {
+                auto sum_reduction = sycl::reduction(d_sum, sycl::plus<uint64_t>());
+                h.parallel_for(sycl::range<1>(remainder), sum_reduction, [=](sycl::id<1> id, auto& sum_acc) {
+                    sum_acc += static_cast<uint64_t>(d_image[off + id]);
+                });
+            });
+        }
+    } else {
+        q.submit([&](sycl::handler& h) {
+            auto sum_reduction = sycl::reduction(d_sum, sycl::plus<uint64_t>());
+            h.parallel_for(sycl::range<2>(roiH, roiW), sum_reduction, [=](sycl::id<2> id, auto& sum_acc) {
+                int y = roiT + static_cast<int>(id[0]);
+                int x = roiL + static_cast<int>(id[1]);
+                sum_acc += static_cast<uint64_t>(d_image[y * width + x]);
+            });
         });
-    }).wait();
+    }
+    q.wait();
 
     double mean = static_cast<double>(*d_sum) / static_cast<double>(totalPixels);
     ctx.free<uint64_t>(d_sum);
@@ -56,25 +91,77 @@ void SYCL_Statistics::computeMeanRMS(SYCLContext& ctx, const uint16_t* d_image, 
         return;
     }
 
-    outMean = computeMean(ctx, d_image, width, height, roi);
-
     auto& q = ctx.getQueue();
-    float* d_sqDiffSum = ctx.allocateShared<float>(1);
-    *d_sqDiffSum = 0.0f;
-    float meanF = static_cast<float>(outMean);
+    uint64_t* d_sums = ctx.allocateShared<uint64_t>(2); // [0] = sum, [1] = sumSq
+    d_sums[0] = 0;
+    d_sums[1] = 0;
 
-    q.submit([&](sycl::handler& h) {
-        auto sq_reduction = sycl::reduction(d_sqDiffSum, sycl::plus<float>());
-        h.parallel_for(sycl::range<2>(roiH, roiW), sq_reduction, [=](sycl::id<2> id, auto& sq_acc) {
-            int y = roiT + static_cast<int>(id[0]);
-            int x = roiL + static_cast<int>(id[1]);
-            float diff = static_cast<float>(d_image[y * width + x]) - meanF;
-            sq_acc += diff * diff;
+    bool isFull = (!roi || (roiL == 0 && roiT == 0 && roiW == width && roiH == height));
+    if (isFull) {
+        constexpr size_t VEC = 8;
+        size_t vecCount = totalPixels / VEC;
+        size_t remainder = totalPixels % VEC;
+        constexpr size_t WG = 256;
+        size_t numWG = (vecCount + WG - 1) / WG;
+
+        if (vecCount > 0) {
+            q.submit([&](sycl::handler& h) {
+                auto redSum = sycl::reduction(&d_sums[0], sycl::plus<uint64_t>());
+                auto redSq  = sycl::reduction(&d_sums[1], sycl::plus<uint64_t>());
+                h.parallel_for(sycl::nd_range<1>(numWG * WG, WG), redSum, redSq, [=](sycl::nd_item<1> it, auto& sum_acc, auto& sq_acc) {
+                    size_t idx = it.get_global_id(0);
+                    if (idx < vecCount) {
+                        auto inV = reinterpret_cast<const sycl::vec<uint16_t, VEC>*>(d_image)[idx];
+                        uint64_t localSum = 0;
+                        uint64_t localSq = 0;
+                        #pragma unroll
+                        for (int k = 0; k < 8; ++k) {
+                            uint64_t v = static_cast<uint64_t>(inV[k]);
+                            localSum += v;
+                            localSq += v * v;
+                        }
+                        sum_acc += localSum;
+                        sq_acc += localSq;
+                    }
+                });
+            });
+        }
+
+        if (remainder > 0) {
+            size_t off = vecCount * VEC;
+            q.submit([&](sycl::handler& h) {
+                auto redSum = sycl::reduction(&d_sums[0], sycl::plus<uint64_t>());
+                auto redSq  = sycl::reduction(&d_sums[1], sycl::plus<uint64_t>());
+                h.parallel_for(sycl::range<1>(remainder), redSum, redSq, [=](sycl::id<1> id, auto& sum_acc, auto& sq_acc) {
+                    uint64_t v = static_cast<uint64_t>(d_image[off + id]);
+                    sum_acc += v;
+                    sq_acc += v * v;
+                });
+            });
+        }
+    } else {
+        q.submit([&](sycl::handler& h) {
+            auto redSum = sycl::reduction(&d_sums[0], sycl::plus<uint64_t>());
+            auto redSq  = sycl::reduction(&d_sums[1], sycl::plus<uint64_t>());
+            h.parallel_for(sycl::range<2>(roiH, roiW), redSum, redSq, [=](sycl::id<2> id, auto& sum_acc, auto& sq_acc) {
+                int y = roiT + static_cast<int>(id[0]);
+                int x = roiL + static_cast<int>(id[1]);
+                uint64_t v = static_cast<uint64_t>(d_image[y * width + x]);
+                sum_acc += v;
+                sq_acc += v * v;
+            });
         });
-    }).wait();
+    }
 
-    outRMS = std::sqrt(static_cast<double>(*d_sqDiffSum) / static_cast<double>(totalPixels));
-    ctx.free<float>(d_sqDiffSum);
+    q.wait();
+
+    double totalN = static_cast<double>(totalPixels);
+    outMean = static_cast<double>(d_sums[0]) / totalN;
+    double meanSq = static_cast<double>(d_sums[1]) / totalN;
+    double variance = meanSq - (outMean * outMean);
+    outRMS = std::sqrt(variance > 0.0 ? variance : 0.0);
+
+    ctx.free<uint64_t>(d_sums);
 }
 
 void SYCL_Statistics::computeSlidingMeanRMS(SYCLContext& ctx, const uint16_t* d_image, int width, int height, const RectROI& roi, double& outMean, double& outRMS, int rmsSize, int rmsStep) {
@@ -118,16 +205,18 @@ void SYCL_Statistics::computeSlidingMeanRMS(SYCLContext& ctx, const uint16_t* d_
 
             float tileSum = 0.0f;
             for (int dy = 0; dy < rmsSize; ++dy) {
+                int rowOff = (Y + dy) * width + X;
                 for (int dx = 0; dx < rmsSize; ++dx) {
-                    tileSum += static_cast<float>(d_image[(Y + dy) * width + (X + dx)]);
+                    tileSum += static_cast<float>(d_image[rowOff + dx]);
                 }
             }
             float tileMean = tileSum / tileSizeArea;
 
             float tileDiffSq = 0.0f;
             for (int dy = 0; dy < rmsSize; ++dy) {
+                int rowOff = (Y + dy) * width + X;
                 for (int dx = 0; dx < rmsSize; ++dx) {
-                    float diff = static_cast<float>(d_image[(Y + dy) * width + (X + dx)]) - tileMean;
+                    float diff = static_cast<float>(d_image[rowOff + dx]) - tileMean;
                     tileDiffSq += diff * diff;
                 }
             }
@@ -157,16 +246,49 @@ void SYCL_Statistics::computeMinMax(SYCLContext& ctx, const uint16_t* d_image, i
     d_results[0] = 0xFFFF;
     d_results[1] = 0x0000;
 
-    q.submit([&](sycl::handler& h) {
-        auto redMin = sycl::reduction(&d_results[0], sycl::minimum<uint16_t>());
-        auto redMax = sycl::reduction(&d_results[1], sycl::maximum<uint16_t>());
+    constexpr size_t VEC = 8;
+    size_t vecCount = total / VEC;
+    size_t remainder = total % VEC;
+    constexpr size_t WG = 256;
+    size_t numWG = (vecCount + WG - 1) / WG;
 
-        h.parallel_for(sycl::range<1>(total), redMin, redMax, [=](sycl::id<1> idx, auto& accMin, auto& accMax) {
-            uint16_t val = d_image[idx];
-            accMin.combine(val);
-            accMax.combine(val);
+    if (vecCount > 0) {
+        q.submit([&](sycl::handler& h) {
+            auto redMin = sycl::reduction(&d_results[0], sycl::minimum<uint16_t>());
+            auto redMax = sycl::reduction(&d_results[1], sycl::maximum<uint16_t>());
+
+            h.parallel_for(sycl::nd_range<1>(numWG * WG, WG), redMin, redMax, [=](sycl::nd_item<1> it, auto& accMin, auto& accMax) {
+                size_t idx = it.get_global_id(0);
+                if (idx < vecCount) {
+                    auto inV = reinterpret_cast<const sycl::vec<uint16_t, VEC>*>(d_image)[idx];
+                    uint16_t lMin = inV[0];
+                    uint16_t lMax = inV[0];
+                    #pragma unroll
+                    for (int k = 1; k < 8; ++k) {
+                        lMin = sycl::min(lMin, inV[k]);
+                        lMax = sycl::max(lMax, inV[k]);
+                    }
+                    accMin.combine(lMin);
+                    accMax.combine(lMax);
+                }
+            });
         });
-    }).wait();
+    }
+
+    if (remainder > 0) {
+        size_t off = vecCount * VEC;
+        q.submit([&](sycl::handler& h) {
+            auto redMin = sycl::reduction(&d_results[0], sycl::minimum<uint16_t>());
+            auto redMax = sycl::reduction(&d_results[1], sycl::maximum<uint16_t>());
+            h.parallel_for(sycl::range<1>(remainder), redMin, redMax, [=](sycl::id<1> id, auto& accMin, auto& accMax) {
+                uint16_t val = d_image[off + id];
+                accMin.combine(val);
+                accMax.combine(val);
+            });
+        });
+    }
+
+    q.wait();
 
     outMin = d_results[0];
     outMax = d_results[1];

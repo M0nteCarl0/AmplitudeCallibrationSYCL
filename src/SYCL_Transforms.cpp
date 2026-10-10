@@ -7,29 +7,120 @@ namespace sycl_ip {
 bool SYCL_Transforms::invert(SYCLContext& ctx, const uint16_t* d_in, uint16_t* d_out, size_t count) {
     if (!d_in || !d_out || count == 0) return false;
     auto& q = ctx.getQueue();
-    q.parallel_for(sycl::range<1>(count), [=](sycl::id<1> idx) {
-        d_out[idx] = static_cast<uint16_t>(65535 - d_in[idx]);
-    }).wait();
+
+    constexpr size_t VEC = 4;
+    size_t vecCount = count / VEC;
+    size_t remainder = count % VEC;
+    constexpr size_t WG = 256;
+    size_t numWG = (vecCount + WG - 1) / WG;
+
+    if (vecCount > 0) {
+        q.submit([&](sycl::handler& h) {
+            h.parallel_for(sycl::nd_range<1>(numWG * WG, WG), [=](sycl::nd_item<1> it) {
+                size_t idx = it.get_global_id(0);
+                if (idx < vecCount) {
+                    auto inV = reinterpret_cast<const sycl::vec<uint16_t, VEC>*>(d_in)[idx];
+                    sycl::vec<uint16_t, VEC> outV;
+                    #pragma unroll
+                    for (size_t k = 0; k < VEC; ++k) {
+                        outV[k] = static_cast<uint16_t>(65535 - inV[k]);
+                    }
+                    reinterpret_cast<sycl::vec<uint16_t, VEC>*>(d_out)[idx] = outV;
+                }
+            });
+        });
+    }
+
+    if (remainder > 0) {
+        size_t off = vecCount * VEC;
+        q.parallel_for(sycl::range<1>(remainder), [=](sycl::id<1> id) {
+            d_out[off + id] = static_cast<uint16_t>(65535 - d_in[off + id]);
+        });
+    }
+
+    q.wait();
     return true;
 }
 
 bool SYCL_Transforms::subtract(SYCLContext& ctx, const uint16_t* d_inA, const uint16_t* d_inB, uint16_t* d_out, size_t count, int offset) {
     if (!d_inA || !d_inB || !d_out || count == 0) return false;
     auto& q = ctx.getQueue();
-    q.parallel_for(sycl::range<1>(count), [=](sycl::id<1> idx) {
-        int diff = static_cast<int>(d_inA[idx]) - static_cast<int>(d_inB[idx]) + offset;
-        d_out[idx] = static_cast<uint16_t>(sycl::clamp(diff, 0, 65535));
-    }).wait();
+
+    constexpr size_t VEC = 4;
+    size_t vecCount = count / VEC;
+    size_t remainder = count % VEC;
+    constexpr size_t WG = 256;
+    size_t numWG = (vecCount + WG - 1) / WG;
+
+    if (vecCount > 0) {
+        q.submit([&](sycl::handler& h) {
+            h.parallel_for(sycl::nd_range<1>(numWG * WG, WG), [=](sycl::nd_item<1> it) {
+                size_t idx = it.get_global_id(0);
+                if (idx < vecCount) {
+                    auto a = reinterpret_cast<const sycl::vec<uint16_t, VEC>*>(d_inA)[idx];
+                    auto b = reinterpret_cast<const sycl::vec<uint16_t, VEC>*>(d_inB)[idx];
+                    sycl::vec<uint16_t, VEC> outV;
+                    #pragma unroll
+                    for (size_t k = 0; k < VEC; ++k) {
+                        int diff = static_cast<int>(a[k]) - static_cast<int>(b[k]) + offset;
+                        outV[k] = static_cast<uint16_t>(sycl::min(sycl::max(diff, 0), 65535));
+                    }
+                    reinterpret_cast<sycl::vec<uint16_t, VEC>*>(d_out)[idx] = outV;
+                }
+            });
+        });
+    }
+
+    if (remainder > 0) {
+        size_t off = vecCount * VEC;
+        q.parallel_for(sycl::range<1>(remainder), [=](sycl::id<1> id) {
+            int diff = static_cast<int>(d_inA[off + id]) - static_cast<int>(d_inB[off + id]) + offset;
+            d_out[off + id] = static_cast<uint16_t>(sycl::min(sycl::max(diff, 0), 65535));
+        });
+    }
+
+    q.wait();
     return true;
 }
 
 bool SYCL_Transforms::subtractAbs(SYCLContext& ctx, const uint16_t* d_inA, const uint16_t* d_inB, uint16_t* d_out, size_t count) {
     if (!d_inA || !d_inB || !d_out || count == 0) return false;
     auto& q = ctx.getQueue();
-    q.parallel_for(sycl::range<1>(count), [=](sycl::id<1> idx) {
-        int diff = std::abs(static_cast<int>(d_inA[idx]) - static_cast<int>(d_inB[idx]));
-        d_out[idx] = static_cast<uint16_t>(sycl::clamp(diff, 0, 65535));
-    }).wait();
+
+    constexpr size_t VEC = 4;
+    size_t vecCount = count / VEC;
+    size_t remainder = count % VEC;
+    constexpr size_t WG = 256;
+    size_t numWG = (vecCount + WG - 1) / WG;
+
+    if (vecCount > 0) {
+        q.submit([&](sycl::handler& h) {
+            h.parallel_for(sycl::nd_range<1>(numWG * WG, WG), [=](sycl::nd_item<1> it) {
+                size_t idx = it.get_global_id(0);
+                if (idx < vecCount) {
+                    auto a = reinterpret_cast<const sycl::vec<uint16_t, VEC>*>(d_inA)[idx];
+                    auto b = reinterpret_cast<const sycl::vec<uint16_t, VEC>*>(d_inB)[idx];
+                    sycl::vec<uint16_t, VEC> outV;
+                    #pragma unroll
+                    for (size_t k = 0; k < VEC; ++k) {
+                        int diff = std::abs(static_cast<int>(a[k]) - static_cast<int>(b[k]));
+                        outV[k] = static_cast<uint16_t>(sycl::min(diff, 65535));
+                    }
+                    reinterpret_cast<sycl::vec<uint16_t, VEC>*>(d_out)[idx] = outV;
+                }
+            });
+        });
+    }
+
+    if (remainder > 0) {
+        size_t off = vecCount * VEC;
+        q.parallel_for(sycl::range<1>(remainder), [=](sycl::id<1> id) {
+            int diff = std::abs(static_cast<int>(d_inA[off + id]) - static_cast<int>(d_inB[off + id]));
+            d_out[off + id] = static_cast<uint16_t>(sycl::min(diff, 65535));
+        });
+    }
+
+    q.wait();
     return true;
 }
 

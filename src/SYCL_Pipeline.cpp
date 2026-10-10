@@ -272,34 +272,43 @@ void SYCL_Pipeline::runBenchmarkSuite() {
             auto t1 = std::chrono::high_resolution_clock::now();
             double ms = std::chrono::duration<double, std::milli>(t1 - t0).count() / iterations;
             double gbps = (imgSizeMB / 1024.0) / (ms / 1000.0);
-            std::cout << "  [Mean & RMS Reduction]: " << std::setw(8) << ms << " ms (" << std::setw(6) << (1000.0 / ms) << " FPS, " << std::setw(6) << gbps << " GB/s)\n";
+            std::cout << "  [Mean & RMS Reduction]: " << std::setw(8) << ms << " ms (" << std::setw(6) << (1000.0 / ms) << " FPS, " << std::setw(6) << gbps << " GB/s Mem BW)\n";
         }
 
         // 2. Multi-Image Accumulation Benchmark
         {
+            // Warmup
+            SYCL_Average::accumulate(ctx, d_accum, d_inA, count);
+
             auto t0 = std::chrono::high_resolution_clock::now();
             for (int i = 0; i < iterations; ++i) {
                 SYCL_Average::accumulate(ctx, d_accum, d_inA, count);
             }
             auto t1 = std::chrono::high_resolution_clock::now();
             double ms = std::chrono::duration<double, std::milli>(t1 - t0).count() / iterations;
-            double gbps = (imgSizeMB / 1024.0) / (ms / 1000.0);
-            std::cout << "  [Image Accumulate]:     " << std::setw(8) << ms << " ms (" << std::setw(6) << (1000.0 / ms) << " FPS, " << std::setw(6) << gbps << " GB/s)\n";
+            double effGbps = (imgSizeMB / 1024.0) / (ms / 1000.0);
+            double memTrafficGB = (count * (sizeof(uint16_t) + 2 * sizeof(uint32_t))) / (1024.0 * 1024.0 * 1024.0);
+            double memGbps = memTrafficGB / (ms / 1000.0);
+            std::cout << "  [Image Accumulate]:     " << std::setw(8) << ms << " ms (" << std::setw(6) << (1000.0 / ms) << " FPS, " << std::setw(6) << effGbps << " GB/s eff, " << std::setw(6) << memGbps << " GB/s Mem BW)\n";
         }
 
         // 3. 2D Box Blur (Smooth) Benchmark
         {
+            uint16_t* d_temp = ctx.allocateDevice<uint16_t>(count);
             // Warmup
-            SYCL_Filters::smooth(ctx, d_inA, d_out, W, H, 2);
+            SYCL_Filters::smooth(ctx, d_inA, d_out, W, H, 2, d_temp);
 
             auto t0 = std::chrono::high_resolution_clock::now();
             for (int i = 0; i < iterations; ++i) {
-                SYCL_Filters::smooth(ctx, d_inA, d_out, W, H, 2);
+                SYCL_Filters::smooth(ctx, d_inA, d_out, W, H, 2, d_temp);
             }
             auto t1 = std::chrono::high_resolution_clock::now();
+            ctx.free<uint16_t>(d_temp);
+
             double ms = std::chrono::duration<double, std::milli>(t1 - t0).count() / iterations;
-            double gbps = (2 * imgSizeMB / 1024.0) / (ms / 1000.0);
-            std::cout << "  [2D Box Blur (Smooth)]: " << std::setw(8) << ms << " ms (" << std::setw(6) << (1000.0 / ms) << " FPS, " << std::setw(6) << gbps << " GB/s)\n";
+            double effGbps = (2 * imgSizeMB / 1024.0) / (ms / 1000.0);
+            double memGbps = (4 * imgSizeMB / 1024.0) / (ms / 1000.0);
+            std::cout << "  [2D Box Blur (Smooth)]: " << std::setw(8) << ms << " ms (" << std::setw(6) << (1000.0 / ms) << " FPS, " << std::setw(6) << effGbps << " GB/s eff, " << std::setw(6) << memGbps << " GB/s Mem BW)\n";
         }
 
         // 4. Defect / Spike Suppression Benchmark
@@ -313,7 +322,8 @@ void SYCL_Pipeline::runBenchmarkSuite() {
             }
             auto t1 = std::chrono::high_resolution_clock::now();
             double ms = std::chrono::duration<double, std::milli>(t1 - t0).count() / iterations;
-            std::cout << "  [Spike Suppression]:    " << std::setw(8) << ms << " ms (" << std::setw(6) << (1000.0 / ms) << " FPS)\n";
+            double effGbps = (imgSizeMB / 1024.0) / (ms / 1000.0);
+            std::cout << "  [Spike Suppression]:    " << std::setw(8) << ms << " ms (" << std::setw(6) << (1000.0 / ms) << " FPS, " << std::setw(6) << effGbps << " GB/s eff)\n";
         }
 
         // 5. Image Calibration Repair Benchmark
@@ -330,8 +340,10 @@ void SYCL_Pipeline::runBenchmarkSuite() {
             }
             auto t1 = std::chrono::high_resolution_clock::now();
             double ms = std::chrono::duration<double, std::milli>(t1 - t0).count() / iterations;
-            double gbps = (imgSizeMB / 1024.0) / (ms / 1000.0);
-            std::cout << "  [Calibration Repair]:   " << std::setw(8) << ms << " ms (" << std::setw(6) << (1000.0 / ms) << " FPS, " << std::setw(6) << gbps << " GB/s)\n";
+            double effGbps = (imgSizeMB / 1024.0) / (ms / 1000.0);
+            double memTrafficGB = (count * (2 * sizeof(uint16_t) + sizeof(FitParam))) / (1024.0 * 1024.0 * 1024.0);
+            double memGbps = memTrafficGB / (ms / 1000.0);
+            std::cout << "  [Calibration Repair]:   " << std::setw(8) << ms << " ms (" << std::setw(6) << (1000.0 / ms) << " FPS, " << std::setw(6) << effGbps << " GB/s eff, " << std::setw(6) << memGbps << " GB/s Mem BW)\n";
 
             ctx.free<FitParam>(d_params);
             ctx.free<int32_t>(d_inl);
@@ -339,14 +351,19 @@ void SYCL_Pipeline::runBenchmarkSuite() {
 
         // 6. Image Subtract Benchmark
         {
+            // Warmup
+            SYCL_Transforms::subtract(ctx, d_inA, d_inB, d_out, count);
+
             auto t0 = std::chrono::high_resolution_clock::now();
             for (int i = 0; i < iterations; ++i) {
                 SYCL_Transforms::subtract(ctx, d_inA, d_inB, d_out, count);
             }
             auto t1 = std::chrono::high_resolution_clock::now();
             double ms = std::chrono::duration<double, std::milli>(t1 - t0).count() / iterations;
-            double gbps = (2 * imgSizeMB / 1024.0) / (ms / 1000.0);
-            std::cout << "  [Image Subtract]:       " << std::setw(8) << ms << " ms (" << std::setw(6) << (1000.0 / ms) << " FPS, " << std::setw(6) << gbps << " GB/s)\n";
+            double effGbps = (2 * imgSizeMB / 1024.0) / (ms / 1000.0);
+            double memTrafficGB = (count * 3 * sizeof(uint16_t)) / (1024.0 * 1024.0 * 1024.0);
+            double memGbps = memTrafficGB / (ms / 1000.0);
+            std::cout << "  [Image Subtract]:       " << std::setw(8) << ms << " ms (" << std::setw(6) << (1000.0 / ms) << " FPS, " << std::setw(6) << effGbps << " GB/s eff, " << std::setw(6) << memGbps << " GB/s Mem BW)\n";
         }
 
         ctx.free<uint16_t>(d_inA);

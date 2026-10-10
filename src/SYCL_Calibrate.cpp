@@ -88,9 +88,13 @@ bool SYCL_Calibrate::calibrate(SYCLContext& ctx,
     int height = m_height;
     int margin = 100; // exclude border for INL accumulation
 
+    constexpr size_t WG = 256;
+    size_t numWG = (totalPixels + WG - 1) / WG;
+
     q.submit([&](sycl::handler& h) {
-        h.parallel_for(sycl::range<1>(totalPixels), [=](sycl::id<1> idx) {
-            size_t p = idx[0];
+        h.parallel_for(sycl::nd_range<1>(numWG * WG, WG), [=](sycl::nd_item<1> it) {
+            size_t p = it.get_global_id(0);
+            if (p >= totalPixels) return;
             uint16_t bk = d_imagePtrs[0][p];
             float p0 = static_cast<float>(bk);
 

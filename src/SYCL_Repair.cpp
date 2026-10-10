@@ -17,25 +17,60 @@ bool SYCL_Repair::repairImage(SYCLContext& ctx,
     auto& q = ctx.getQueue();
     bool useINL = enableINL && (d_inlTable != nullptr);
 
-    q.parallel_for(sycl::range<1>(count), [=](sycl::id<1> idx) {
-        size_t i = idx[0];
-        uint16_t rawVal = d_in[i];
-        int A = static_cast<int>(rawVal);
+    constexpr size_t VEC = 4;
+    size_t vecCount = count / VEC;
+    size_t remainder = count % VEC;
+    constexpr size_t WG = 256;
+    size_t numWG = (vecCount + WG - 1) / WG;
 
-        if (useINL) {
-            int inlCorrection = d_inlTable[rawVal];
-            A = A - inlCorrection;
-            A = sycl::clamp(A, 0, 65535);
-        }
+    if (vecCount > 0) {
+        q.submit([&](sycl::handler& h) {
+            h.parallel_for(sycl::nd_range<1>(numWG * WG, WG), [=](sycl::nd_item<1> it) {
+                size_t idx = it.get_global_id(0);
+                if (idx < vecCount) {
+                    auto inV = reinterpret_cast<const sycl::vec<uint16_t, VEC>*>(d_in)[idx];
+                    const FitParam* pBase = d_params + (idx * VEC);
+                    sycl::vec<uint16_t, VEC> outV;
 
-        FitParam p = d_params[i];
-        float V = static_cast<float>(A) - p.p0;
-        float ampl = p.p1 * V + bkAverage;
+                    #pragma unroll
+                    for (int k = 0; k < 4; ++k) {
+                        uint16_t rawVal = inV[k];
+                        int A = static_cast<int>(rawVal);
+                        if (useINL) {
+                            int inlCorrection = d_inlTable[rawVal];
+                            A = A - inlCorrection;
+                            A = sycl::clamp(A, 0, 65535);
+                        }
+                        FitParam p = pBase[k];
+                        float V = static_cast<float>(A) - p.p0;
+                        float ampl = p.p1 * V + bkAverage;
+                        outV[k] = static_cast<uint16_t>(sycl::clamp(ampl + 0.5f, 0.0f, 65535.0f));
+                    }
+                    reinterpret_cast<sycl::vec<uint16_t, VEC>*>(d_out)[idx] = outV;
+                }
+            });
+        });
+    }
 
-        ampl = sycl::clamp(ampl + 0.5f, 0.0f, 65535.0f);
-        d_out[i] = static_cast<uint16_t>(ampl);
-    }).wait();
+    if (remainder > 0) {
+        size_t off = vecCount * VEC;
+        q.parallel_for(sycl::range<1>(remainder), [=](sycl::id<1> id) {
+            size_t i = off + id;
+            uint16_t rawVal = d_in[i];
+            int A = static_cast<int>(rawVal);
+            if (useINL) {
+                int inlCorrection = d_inlTable[rawVal];
+                A = A - inlCorrection;
+                A = sycl::clamp(A, 0, 65535);
+            }
+            FitParam p = d_params[i];
+            float V = static_cast<float>(A) - p.p0;
+            float ampl = p.p1 * V + bkAverage;
+            d_out[i] = static_cast<uint16_t>(sycl::clamp(ampl + 0.5f, 0.0f, 65535.0f));
+        });
+    }
 
+    q.wait();
     return true;
 }
 
@@ -86,12 +121,42 @@ bool SYCL_Repair::interpolateVoltages(SYCLContext& ctx,
     float dHV0 = targetHV - hv0;
 
     auto& q = ctx.getQueue();
-    q.parallel_for(sycl::range<1>(count), [=](sycl::id<1> idx) {
-        size_t i = idx[0];
-        float v = invDHV * (static_cast<float>(d_out0[i]) * dHV1 + static_cast<float>(d_out1[i]) * dHV0);
-        v = sycl::clamp(v + 0.5f, 0.0f, 65535.0f);
-        d_outTarget[i] = static_cast<uint16_t>(v);
-    }).wait();
+
+    constexpr size_t VEC = 8;
+    size_t vecCount = count / VEC;
+    size_t remainder = count % VEC;
+    constexpr size_t WG = 256;
+    size_t numWG = (vecCount + WG - 1) / WG;
+
+    if (vecCount > 0) {
+        q.submit([&](sycl::handler& h) {
+            h.parallel_for(sycl::nd_range<1>(numWG * WG, WG), [=](sycl::nd_item<1> it) {
+                size_t idx = it.get_global_id(0);
+                if (idx < vecCount) {
+                    auto in0 = reinterpret_cast<const sycl::vec<uint16_t, VEC>*>(d_out0)[idx];
+                    auto in1 = reinterpret_cast<const sycl::vec<uint16_t, VEC>*>(d_out1)[idx];
+                    sycl::vec<uint16_t, VEC> outV;
+                    #pragma unroll
+                    for (int k = 0; k < 8; ++k) {
+                        float v = invDHV * (static_cast<float>(in0[k]) * dHV1 + static_cast<float>(in1[k]) * dHV0);
+                        outV[k] = static_cast<uint16_t>(sycl::clamp(v + 0.5f, 0.0f, 65535.0f));
+                    }
+                    reinterpret_cast<sycl::vec<uint16_t, VEC>*>(d_outTarget)[idx] = outV;
+                }
+            });
+        });
+    }
+
+    if (remainder > 0) {
+        size_t off = vecCount * VEC;
+        q.parallel_for(sycl::range<1>(remainder), [=](sycl::id<1> id) {
+            size_t i = off + id;
+            float v = invDHV * (static_cast<float>(d_out0[i]) * dHV1 + static_cast<float>(d_out1[i]) * dHV0);
+            d_outTarget[i] = static_cast<uint16_t>(sycl::clamp(v + 0.5f, 0.0f, 65535.0f));
+        });
+    }
+
+    q.wait();
 
     return true;
 }
