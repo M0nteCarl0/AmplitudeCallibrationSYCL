@@ -345,16 +345,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build patchelf libboost-fiber-dev libboost-context-dev
+
       - name: Setup Micromamba and install AdaptiveCpp
         uses: mamba-org/setup-micromamba@v2
         with:
           environment-name: sycl-arm64
           create-args: >-
             adaptivecpp
-            ninja
             cmake
-            patchelf
-            libboost-devel
+            ninja
           channels: conda-forge
 
       - name: Configure and Build with CMake & Ninja
@@ -381,10 +384,15 @@ jobs:
           cp -r include/sycl_ip "$STAGE/include/" 2>/dev/null || cp -r include "$STAGE/include/" 2>/dev/null || true
           cp README.md LICENSE "$STAGE/" 2>/dev/null || true
 
-          # 3. Copy AdaptiveCpp runtime libraries
+          # 3. Copy AdaptiveCpp and Boost runtime libraries
           CONDA_LIB="$MAMBA_ROOT_PREFIX/envs/sycl-arm64/lib"
           for pattern in 'libacpp*' 'librt-backend*' 'libboost_context*' 'libboost_fiber*' 'libstdc++.so*'; do
             find "$CONDA_LIB" -maxdepth 1 -name "$pattern" -exec cp -a -u {} "$STAGE/lib/" \; 2>/dev/null || true
+          done
+          for boostdir in "$CONDA_LIB" "/usr/lib/aarch64-linux-gnu"; do
+            if [ -d "$boostdir" ]; then
+              find "$boostdir" -maxdepth 1 \( -name 'libboost_context*.so*' -o -name 'libboost_fiber*.so*' \) -exec cp -a -u {} "$STAGE/lib/" \; 2>/dev/null || true
+            fi
           done
           if [ -d "$CONDA_LIB/hipSYCL" ]; then
             cp -a -u "$CONDA_LIB/hipSYCL"/* "$STAGE/lib/hipSYCL/" 2>/dev/null || true
