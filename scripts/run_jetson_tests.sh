@@ -124,7 +124,7 @@ if [[ "${CLEAN_BUILD}" == true && -d "${BUILD_DIR}" ]]; then
     rm -rf "${BUILD_DIR}"
 fi
 
-CXX_FLAGS="--acpp-targets=cuda:${CUDA_ARCH}"
+CXX_FLAGS="--acpp-targets=generic;cuda:${CUDA_ARCH}"
 if [[ -n "${CUDA_PATH}" ]]; then
     CXX_FLAGS="${CXX_FLAGS} --acpp-cuda-path=${CUDA_PATH}"
 fi

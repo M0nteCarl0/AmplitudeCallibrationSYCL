@@ -357,21 +357,42 @@ jobs:
           # The CUDA-enabled flavour of AdaptiveCpp is required for GPU SYCL on ARM64: the default
           # variant of the conda package only ships the omp (CPU) and ocl (OpenCL) backends.
           # cuda12* is intentional - Jetson Orin (JetPack 6) provides the CUDA 12 driver/runtime.
+          # The CUDA dev stack (headers + nvcc/ptxas) is needed for the ahead-of-time sm_87 build;
+          # it is pinned to 12.9 to match the cuda129 AdaptiveCpp variant.
           create-args: >-
             -c conda-forge
             adaptivecpp=*=cuda12*
+            cuda-version=12.9
+            cuda-nvcc=12.9
+            cuda-cudart-dev=12.9
+            libcurand-dev=10.3
             cmake
             ninja
 
       - name: Configure and Build with CMake & Ninja
         shell: bash -el {0}
         run: |
+          # "generic" keeps the runtime JIT (portable to any GPU / used for the CPU path), while
+          # cuda:sm_87 adds ahead-of-time kernels for Jetson Orin, so that board needs no JIT.
+          export ACPP_TARGETS="generic;cuda:sm_87"
+          CUDA_INC="$(ls -d "$CONDA_PREFIX"/targets/*-linux/include | head -n 1)"
+          echo "ACPP_TARGETS=$ACPP_TARGETS"
+          echo "CUDA include dir: $CUDA_INC"
           cmake -B build -G Ninja \
             -DCMAKE_CXX_COMPILER=acpp \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_FLAGS="--acpp-cuda-path=$CONDA_PREFIX -I$CUDA_INC" \
+            -DCMAKE_EXE_LINKER_FLAGS="-L$CONDA_PREFIX/lib -lcudart" \
             -DBUILD_SHARED_LIBS=OFF \
             -DBUILD_EXAMPLES=ON
           cmake --build build --config Release
+          # The ahead-of-time kernels must be embedded, otherwise the CUDA target silently
+          # degraded to the JIT-only "generic" build.
+          if ! readelf -SW build/bin/AmplitudeCallibrationSYCL | grep -q nv_fatbin; then
+            echo "::error::binary has no CUDA fatbin - the cuda:sm_87 AOT target was not compiled"
+            exit 1
+          fi
+          echo "AOT sm_87 kernels embedded: $(readelf -SW build/bin/AmplitudeCallibrationSYCL | grep -c nv_fatbin) fatbin section(s)"
 
       - name: Stage Linux ARM64 Artifacts
         shell: bash -el {0}
