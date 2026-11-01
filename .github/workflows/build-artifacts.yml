@@ -339,7 +339,7 @@ jobs:
           retention-days: 30
 
   build-linux-arm64:
-    name: Linux ARM64 (CMake / acpp / Ninja)
+    name: Linux ARM64 (CMake / acpp + CUDA / Ninja)
     runs-on: ubuntu-24.04-arm
     steps:
       - name: Checkout repository
@@ -354,9 +354,12 @@ jobs:
         uses: mamba-org/setup-micromamba@v2
         with:
           environment-name: sycl-arm64
+          # The CUDA-enabled flavour of AdaptiveCpp is required for GPU SYCL on ARM64: the default
+          # variant of the conda package only ships the omp (CPU) and ocl (OpenCL) backends.
+          # cuda12* is intentional - Jetson Orin (JetPack 6) provides the CUDA 12 driver/runtime.
           create-args: >-
             -c conda-forge
-            adaptivecpp
+            adaptivecpp=*=cuda12*
             cmake
             ninja
 
@@ -387,7 +390,7 @@ jobs:
           # 3. Copy AdaptiveCpp runtime, backend plugins, JIT bitcode and Boost/libstdc++ runtimes.
           #    Symlinks are dereferenced (-L) so the package never points back into the toolchain.
           CONDA_LIB="$MAMBA_ROOT_PREFIX/envs/sycl-arm64/lib"
-          for pattern in 'libacpp*' 'librt-backend*' 'libllvm-to-*' 'libboost_context*' 'libboost_fiber*' 'libstdc++.so*' 'libgcc_s.so*'; do
+          for pattern in 'libacpp*' 'librt-backend*' 'libllvm-to-*' 'libcudart.so*' 'libboost_context*' 'libboost_fiber*' 'libstdc++.so*' 'libgcc_s.so*'; do
             find "$CONDA_LIB" -maxdepth 1 -name "$pattern" -exec cp -aL {} "$STAGE/lib/" \; 2>/dev/null || true
           done
           for boostdir in "$CONDA_LIB" "/usr/lib/aarch64-linux-gnu"; do
@@ -402,17 +405,21 @@ jobs:
             fi
           done
 
-          # 4. Close the runtime dependency closure of the CPU execution path.
-          #    The AdaptiveCpp OpenMP backend links against libllvm-to-*.so and libLLVM, which are
-          #    not covered by the copy list above; without them the backend plugin fails to load and
-          #    the process aborts ("No CPU backend has been loaded. Terminating.").
-          cpu_targets() {
+          # 4. Close the runtime dependency closure of the packaged backends.
+          #    AdaptiveCpp needs libLLVM at runtime (llvm-to-host for the CPU backend, llvm-to-ptx
+          #    for the CUDA backend); without it the backend plugin fails to load and the process
+          #    aborts with "No CPU backend has been loaded. Terminating.". Libraries that belong to
+          #    the GPU driver of the target machine must never be staged from the toolchain.
+          EXTERNAL_LIBS="libcuda.so.1 libnvidia-ml.so.1 libamdhip64.so.6 libhiprtc.so.6 libOpenCL.so.1"
+          runtime_targets() {
             local f
             for f in "$STAGE/bin/AmplitudeCallibrationSYCL" "$STAGE/bin/SimpleExample" \
                      "$STAGE/lib/libacpp-rt.so" "$STAGE/lib/libacpp-common.so" \
                      "$STAGE/lib/libacpp-clang.so" \
                      "$STAGE/lib/hipSYCL/librt-backend-omp.so" \
+                     "$STAGE/lib/hipSYCL/librt-backend-cuda.so" \
                      "$STAGE/lib/hipSYCL/llvm-to-backend/libllvm-to-host.so" \
+                     "$STAGE/lib/hipSYCL/llvm-to-backend/libllvm-to-ptx.so" \
                      "$STAGE/lib/hipSYCL/llvm-to-backend/libllvm-to-backend.so"; do
               if [ -f "$f" ]; then
                 echo "$f"
@@ -420,12 +427,20 @@ jobs:
             done
           }
           ldd_staged() {
-            cpu_targets | xargs -r -n1 env \
+            runtime_targets | xargs -r -n1 env \
               LD_LIBRARY_PATH="$STAGE/lib:$STAGE/lib/hipSYCL:$STAGE/lib/hipSYCL/llvm-to-backend" \
               ldd 2>/dev/null
           }
+          unresolved_libs() {
+            local soname
+            for soname in $(ldd_staged | awk '/not found/ {print $1}' | sort -u); do
+              if ! echo " $EXTERNAL_LIBS " | grep -q " $soname "; then
+                echo "$soname"
+              fi
+            done
+          }
           for pass in 1 2 3 4 5 6 7 8; do
-            missing=$(ldd_staged | awk '/not found/ {print $1}' | sort -u)
+            missing=$(unresolved_libs)
             if [ -z "$missing" ]; then
               break
             fi
@@ -469,13 +484,15 @@ jobs:
           EOF
           chmod +x "$STAGE/run.sh" "$STAGE/bin/"*
 
-          # 7. Verify the package is self-contained: no unresolved libraries on the CPU path
-          unresolved=$(ldd_staged | awk '/not found/ {print}' | sort -u)
+          # 7. Verify the package is self-contained: no unresolved libraries except GPU drivers
+          unresolved=$(unresolved_libs)
           if [ -n "$unresolved" ]; then
             echo "$unresolved"
             echo "::error::ARM64 package is missing runtime libraries (see ldd output above)"
             exit 1
           fi
+          echo "Staged backends: $(cd "$STAGE/lib/hipSYCL" && ls librt-backend-*.so | tr '\n' ' ')"
+          echo "Driver libraries expected on the target machine: $EXTERNAL_LIBS"
 
           # 8. Test standalone execution with an environment stripped of the toolchain
           echo "Verifying staged ARM64 Linux binary..."
