@@ -60,7 +60,7 @@ int main() {
 
 ## 📊 Performance (3328 × 3328, 11M Pixels)
 
-Benchmarked on **Intel Iris Xe Graphics (96 EU)** vs **13th Gen Intel Core i9-13900H (20 threads)**:
+### Intel Iris Xe Graphics vs Intel Core i9-13900H (x86_64)
 
 | Operation | GPU Time | GPU Throughput | CPU Time | Speedup |
 | :--- | :---: | :---: | :---: | :---: |
@@ -70,6 +70,17 @@ Benchmarked on **Intel Iris Xe Graphics (96 EU)** vs **13th Gen Intel Core i9-13
 | **Calibration Model Repair** | **2.30 ms** | **434 FPS** (53.81 GB/s Mem BW) | 3.10 ms | **~1.3x** |
 | **2D Box Blur Filter (5x5)** | **2.84 ms** | **352 FPS** (29.11 GB/s Mem BW) | 11.62 ms | **~4.1x** |
 | **Spike Noise Suppression** | **3.02 ms** | **331 FPS** | 71.93 ms | **~23.8x** |
+
+### NVIDIA Jetson Orin (ARM64 / sm_87 CUDA)
+
+| Operation | Orin GPU (`sm_87`) | Orin GPU Throughput | Cortex-A78AE CPU | Speedup |
+| :--- | :---: | :---: | :---: | :---: |
+| **Image Subtract** | **1.61 ms** | **620 FPS** (38.39 GB/s Mem BW) | 25.82 ms | **~16.0x** |
+| **Spike Noise Suppression** | **2.01 ms** | **498 FPS** (10.29 GB/s eff) | 277.27 ms | **~138.0x** |
+| **Mean & RMS Reduction** | **2.41 ms** | **414 FPS** (8.55 GB/s Mem BW) | 14.20 ms | **~5.9x** |
+| **Image Accumulation** | **3.04 ms** | **328 FPS** (33.90 GB/s Mem BW) | 18.50 ms | **~6.1x** |
+| **Calibration Model Repair** | **5.57 ms** | **179 FPS** (22.22 GB/s Mem BW) | 47.60 ms | **~8.5x** |
+| **2D Box Blur Filter (5x5)** | **5.71 ms** | **175 FPS** (14.46 GB/s Mem BW) | 478.62 ms | **~83.8x** |
 
 ---
 
@@ -81,12 +92,39 @@ Benchmarked on **Intel Iris Xe Graphics (96 EU)** vs **13th Gen Intel Core i9-13
 ```
 *Or run [`build_and_run.bat`](build_and_run.bat) to build and launch automated validation suites.*
 
-### CMake (Windows & Linux)
+### CMake (Windows & Linux x64)
 ```bash
 source /opt/intel/oneapi/setvars.sh   # On Windows: call setvars.bat intel64
 cmake -B build -G Ninja -DCMAKE_CXX_COMPILER=icpx -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 ```
+
+### Linux ARM64 & NVIDIA Jetson (AdaptiveCpp / CUDA sm_87)
+On NVIDIA Jetson (or remotely over SSH):
+```powershell
+# From Windows: Sync, build, and run tests on Jetson (192.168.8.66)
+.\run_jetson_test.ps1 -TargetHost "192.168.8.66" -Device gpu -Mode test
+
+# Run benchmarks
+.\run_jetson_test.ps1 -TargetHost "192.168.8.66" -Mode bench
+
+# Build and fetch standalone ARM64 distribution package
+.\run_jetson_test.ps1 -TargetHost "192.168.8.66" -FetchArtifacts
+```
+Directly on Jetson:
+```bash
+./scripts/run_jetson_tests.sh --device gpu --test
+./scripts/package_jetson_arm64.sh
+```
+
+---
+
+## 📦 Release Artifacts
+
+Every tag release publishes standalone distribution archives containing precompiled binaries, headers, and bundled SYCL/CUDA runtimes:
+- **`sycl-imageprocess-windows-x64.zip`** — Windows x64 standalone bundle (includes Intel oneAPI and MSVC runtimes)
+- **`sycl-imageprocess-linux-x64.tar.gz`** — Linux x64 standalone bundle (includes Intel oneAPI DPC++ runtimes)
+- **`sycl-imageprocess-linux-arm64.tar.gz`** — Linux ARM64 standalone bundle (includes AdaptiveCpp & CUDA runtimes for NVIDIA Jetson / ARM64 SBCs)
 
 ---
 

@@ -338,9 +338,124 @@ jobs:
           path: artifacts/sycl-imageprocess-linux-x64.tar.gz
           retention-days: 30
 
+  build-linux-arm64:
+    name: Linux ARM64 (CMake / acpp / Ninja)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Micromamba and install AdaptiveCpp
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: sycl-arm64
+          create-args: >-
+            adaptivecpp
+            ninja
+            cmake
+            patchelf
+            libboost-devel
+          channels: conda-forge
+
+      - name: Configure and Build with CMake & Ninja
+        shell: bash -el {0}
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_CXX_COMPILER=acpp \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_EXAMPLES=ON
+          cmake --build build --config Release
+
+      - name: Stage Linux ARM64 Artifacts
+        shell: bash -el {0}
+        run: |
+          STAGE="artifacts/sycl-imageprocess-linux-arm64"
+          mkdir -p "$STAGE/bin" "$STAGE/lib" "$STAGE/lib/hipSYCL" "$STAGE/include"
+
+          # 1. Copy built executables and library
+          find build -type f \( -name 'AmplitudeCallibrationSYCL' -o -name 'SimpleExample' \) -exec cp {} "$STAGE/bin/" \; || true
+          find build -type f \( -name '*.so' -o -name '*.a' \) -exec cp {} "$STAGE/lib/" \; || true
+
+          # 2. Copy headers and docs
+          cp -r include/sycl_ip "$STAGE/include/" 2>/dev/null || cp -r include "$STAGE/include/" 2>/dev/null || true
+          cp README.md LICENSE "$STAGE/" 2>/dev/null || true
+
+          # 3. Copy AdaptiveCpp runtime libraries
+          CONDA_LIB="$MAMBA_ROOT_PREFIX/envs/sycl-arm64/lib"
+          for pattern in 'libacpp*' 'librt-backend*' 'libboost_context*' 'libboost_fiber*' 'libstdc++.so*'; do
+            find "$CONDA_LIB" -maxdepth 1 -name "$pattern" -exec cp -a -u {} "$STAGE/lib/" \; 2>/dev/null || true
+          done
+          if [ -d "$CONDA_LIB/hipSYCL" ]; then
+            cp -a -u "$CONDA_LIB/hipSYCL"/* "$STAGE/lib/hipSYCL/" 2>/dev/null || true
+          fi
+          if [ -d "$CONDA_LIB/AdaptiveCpp" ]; then
+            cp -a -u "$CONDA_LIB/AdaptiveCpp"/* "$STAGE/lib/hipSYCL/" 2>/dev/null || true
+          fi
+
+          # 4. Resolve transitive dependencies via ldd
+          for bin in "$STAGE/bin"/* "$STAGE/lib"/*.so* "$STAGE/lib/hipSYCL"/*.so*; do
+            if [ -f "$bin" ]; then
+              ldd "$bin" 2>/dev/null | grep '=>' | awk '{print $3}' | grep -v '^$' | while read dep; do
+                if [[ "$dep" == *acpp* ]] || [[ "$dep" == *boost* ]] || [[ "$dep" == *cudart* ]]; then
+                  cp -a -u "$dep"* "$STAGE/lib/" 2>/dev/null || true
+                fi
+              done
+            fi
+          done
+
+          # 5. Patch RPATH on binaries and shared libraries
+          for bin in "$STAGE/bin"/*; do
+            if [ -f "$bin" ] && [ -x "$bin" ]; then
+              patchelf --set-rpath '$ORIGIN/../lib:$ORIGIN/../lib/hipSYCL:$ORIGIN' "$bin" 2>/dev/null || true
+            fi
+          done
+          for lib in "$STAGE/lib"/*.so* "$STAGE/lib/hipSYCL"/*.so*; do
+            if [ -f "$lib" ]; then
+              patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/hipSYCL' "$lib" 2>/dev/null || true
+            fi
+          done
+
+          # 6. Create run.sh launcher script in root
+          cat << 'EOF' > "$STAGE/run.sh"
+          #!/bin/bash
+          DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          export LD_LIBRARY_PATH="$DIR/lib:$DIR/lib/hipSYCL:${LD_LIBRARY_PATH:-}"
+          export ACPP_RT_PLUGIN_DIR="$DIR/lib/hipSYCL"
+          export HIPSYCL_RT_PLUGIN_DIR="$DIR/lib/hipSYCL"
+          export ACPP_VISIBILITY_MASK="cuda;omp;generic"
+          if [ $# -eq 0 ]; then
+              exec "$DIR/bin/AmplitudeCallibrationSYCL" --help
+          else
+              exec "$DIR/bin/AmplitudeCallibrationSYCL" "$@"
+          fi
+          EOF
+          chmod +x "$STAGE/run.sh" "$STAGE/bin/"*
+
+          # 7. Test standalone execution
+          echo "Verifying staged ARM64 Linux binary..."
+          "$STAGE/run.sh" --help
+          "$STAGE/run.sh" --test --device cpu
+
+          tar -czvf artifacts/sycl-imageprocess-linux-arm64.tar.gz -C "$STAGE" .
+
+      - name: Upload Linux ARM64 Directory Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sycl-imageprocess-linux-arm64
+          path: artifacts/sycl-imageprocess-linux-arm64/
+          retention-days: 30
+
+      - name: Upload Linux ARM64 Tarball Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: sycl-imageprocess-linux-arm64-tarball
+          path: artifacts/sycl-imageprocess-linux-arm64.tar.gz
+          retention-days: 30
+
   release:
     name: Publish GitHub Release
-    needs: [build-windows, build-linux]
+    needs: [build-windows, build-linux, build-linux-arm64]
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
     runs-on: ubuntu-latest
     steps:
@@ -356,6 +471,12 @@ jobs:
           name: sycl-imageprocess-linux-x64-tarball
           path: release-assets-linux
 
+      - name: Download Linux ARM64 Tarball Package
+        uses: actions/download-artifact@v4
+        with:
+          name: sycl-imageprocess-linux-arm64-tarball
+          path: release-assets-linux-arm64
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -364,6 +485,7 @@ jobs:
           files: |
             release-assets-win/sycl-imageprocess-windows-x64.zip
             release-assets-linux/sycl-imageprocess-linux-x64.tar.gz
+            release-assets-linux-arm64/sycl-imageprocess-linux-arm64.tar.gz
           draft: false
           prerelease: false
           generate_release_notes: true

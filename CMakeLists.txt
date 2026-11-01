@@ -5,11 +5,17 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Enable SYCL offload with Intel oneAPI Compiler
-if (CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+# Enable SYCL offload
+if (CMAKE_CXX_COMPILER MATCHES "acpp" OR DEFINED ENV{ACPP_TARGETS})
+    message(STATUS "Configured AdaptiveCpp SYCL compiler")
+elseif (CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM")
     add_compile_options(-fsycl)
     add_link_options(-fsycl)
     message(STATUS "Configured Intel SYCL offload compiler flags (-fsycl)")
+elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    add_compile_options(-fsycl)
+    add_link_options(-fsycl)
+    message(STATUS "Configured Clang SYCL offload compiler flags (-fsycl)")
 endif()
 
 # Output directories

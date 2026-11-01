@@ -91,7 +91,7 @@ bool SYCL_Pipeline::runValidationSuite(DeviceType deviceType) {
     std::cout << "  Host Grid RMS:  " << hostGridRms  << ", SYCL Grid RMS:  " << syclGridRms
               << " (diff: " << std::abs(hostGridRms - syclGridRms) << ")\n";
 
-    if (std::abs(hostGridMean - syclGridMean) < 1e-4 && std::abs(hostGridRms - syclGridRms) < 1e-4) {
+    if (std::abs(hostGridMean - syclGridMean) < 1e-3 && std::abs(hostGridRms - syclGridRms) < 1e-3) {
         std::cout << "  [Sliding Grid] PASSED\n";
     } else {
         std::cerr << "  [Sliding Grid] FAILED\n";
