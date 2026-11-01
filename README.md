@@ -60,7 +60,16 @@ int main() {
 
 ## 📊 Performance (3328 × 3328, 11M Pixels)
 
-### Intel Iris Xe Graphics vs Intel Core i9-13900H (x86_64)
+**Measurement conditions**
+
+- `--bench` mode: 10 timed iterations per kernel after one warm-up launch on the same buffers; one frame is 3328 × 3328 × 16 bit (21.1 MiB).
+- `Mem BW` is memory traffic derived from the pixel count and the buffers a kernel touches (×3 subtract, ×4 box blur, ×5 accumulate, ×6 repair); `eff` counts a single frame of I/O.
+- Toolchains: Intel oneAPI DPC++ (`icpx` / `icx`, Level-Zero) on x86_64, AdaptiveCpp 25.10 with `--acpp-targets=cuda:sm_87` (ahead-of-time) on Jetson.
+- The prebuilt Linux ARM64 package from [Releases](https://github.com/M0nteCarl0/AmplitudeCallibrationSYCL/releases) is compiled with AdaptiveCpp's default `generic` target: kernels are translated to PTX on first launch and cached in `~/.acpp`, so the first run pays the JIT cost while steady-state timings match this table — run `--bench` twice on the target device.
+
+Numbers come from the reference hardware listed above; re-measure on your own device for exact figures.
+
+### Intel Iris Xe Graphics (Level-Zero) vs Intel Core i9-13900H — x86_64, oneAPI DPC++
 
 | Operation | GPU Time | GPU Throughput | CPU Time | Speedup |
 | :--- | :---: | :---: | :---: | :---: |
@@ -71,7 +80,7 @@ int main() {
 | **2D Box Blur Filter (5x5)** | **2.84 ms** | **352 FPS** (29.11 GB/s Mem BW) | 11.62 ms | **~4.1x** |
 | **Spike Noise Suppression** | **3.02 ms** | **331 FPS** | 71.93 ms | **~23.8x** |
 
-### NVIDIA Jetson Orin (ARM64 / sm_87 CUDA)
+### NVIDIA Jetson Orin — ARM64, JetPack 6, AOT `--acpp-targets=cuda:sm_87`
 
 | Operation | Orin GPU (`sm_87`) | Orin GPU Throughput | Cortex-A78AE CPU | Speedup |
 | :--- | :---: | :---: | :---: | :---: |
@@ -116,6 +125,14 @@ Directly on Jetson:
 ./scripts/run_jetson_tests.sh --device gpu --test
 ./scripts/package_jetson_arm64.sh
 ```
+
+> **Toolchain note.** `--acpp-targets=cuda:sm_87` and the packaged CUDA runtime require an AdaptiveCpp build
+> with the CUDA backend. The default flavour of the conda-forge aarch64 package only ships the `omp` and
+> `ocl` backends, so install the CUDA flavour explicitly
+> (`micromamba install -c conda-forge "adaptivecpp=*=cuda12*"`). The release workflow does the same for the
+> prebuilt ARM64 bundle. `scripts/package_jetson_arm64.sh` bundles every library the staged binaries need
+> (`libLLVM`, `libnuma`, `libgomp`, `libcudart`, …) and verifies the package before archiving; GPU driver
+> libraries (`libcuda.so.1`, …) are expected from the target machine.
 
 ---
 
