@@ -119,15 +119,6 @@ Directly on Jetson:
 
 ---
 
-## 📦 Release Artifacts
-
-Every tag release publishes standalone distribution archives containing precompiled binaries, headers, and bundled SYCL/CUDA runtimes:
-- **`sycl-imageprocess-windows-x64.zip`** — Windows x64 standalone bundle (includes Intel oneAPI and MSVC runtimes)
-- **`sycl-imageprocess-linux-x64.tar.gz`** — Linux x64 standalone bundle (includes Intel oneAPI DPC++ runtimes)
-- **`sycl-imageprocess-linux-arm64.tar.gz`** — Linux ARM64 standalone bundle (includes AdaptiveCpp & CUDA runtimes for NVIDIA Jetson / ARM64 SBCs)
-
----
-
 ## 📚 Documentation
 
 - 📖 **[Class & API Reference](docs/api_reference.md)** — Detailed descriptions of all classes, methods, and structures.
