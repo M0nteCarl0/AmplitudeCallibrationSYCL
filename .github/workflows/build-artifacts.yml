@@ -375,17 +375,39 @@ jobs:
           # "generic" keeps the runtime JIT (portable to any GPU / used for the CPU path), while
           # cuda:sm_87 adds ahead-of-time kernels for Jetson Orin, so that board needs no JIT.
           export ACPP_TARGETS="generic;cuda:sm_87"
-          CUDA_INC="$(ls -d "$CONDA_PREFIX"/targets/*-linux/include | head -n 1)"
+          CUDA_INC=""
+          for cand in "$CONDA_PREFIX"/targets/*-linux/include "$CONDA_PREFIX"/include; do
+            if [ -f "$cand/cuda.h" ]; then
+              CUDA_INC="$cand"
+              break
+            fi
+          done
+          if [ -z "$CUDA_INC" ]; then
+            echo "::error::cuda.h not found in the CUDA dev packages of $CONDA_PREFIX"
+            echo "::error::candidates: $(ls -d "$CONDA_PREFIX"/targets/* 2>/dev/null | tr '\n' ' ')"
+            exit 1
+          fi
           echo "ACPP_TARGETS=$ACPP_TARGETS"
           echo "CUDA include dir: $CUDA_INC"
+          echo "ptxas: $(command -v ptxas || echo MISSING)"
+
           cmake -B build -G Ninja \
             -DCMAKE_CXX_COMPILER=acpp \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_FLAGS="--acpp-cuda-path=$CONDA_PREFIX -I$CUDA_INC" \
-            -DCMAKE_EXE_LINKER_FLAGS="-L$CONDA_PREFIX/lib -lcudart" \
+            -DCMAKE_EXE_LINKER_FLAGS="-L$CONDA_PREFIX/lib" \
+            -DCMAKE_CXX_STANDARD_LIBRARIES="-lcudart" \
             -DBUILD_SHARED_LIBS=OFF \
-            -DBUILD_EXAMPLES=ON
-          cmake --build build --config Release
+            -DBUILD_EXAMPLES=ON > /tmp/configure.log 2>&1 || {
+              echo "::error::cmake configure failed"
+              tail -n 25 /tmp/configure.log | sed 's/^/::error::/'
+              exit 1
+            }
+          cmake --build build --config Release > /tmp/build.log 2>&1 || {
+            echo "::error::cmake build failed"
+            tail -n 25 /tmp/build.log | sed 's/^/::error::/'
+            exit 1
+          }
           # The ahead-of-time kernels must be embedded, otherwise the CUDA target silently
           # degraded to the JIT-only "generic" build.
           if ! readelf -SW build/bin/AmplitudeCallibrationSYCL | grep -q nv_fatbin; then

@@ -124,16 +124,21 @@ if [[ "${CLEAN_BUILD}" == true && -d "${BUILD_DIR}" ]]; then
     rm -rf "${BUILD_DIR}"
 fi
 
-CXX_FLAGS="--acpp-targets=generic;cuda:${CUDA_ARCH}"
+# Semicolons in --acpp-targets break CMake's flag handling, so the target list is passed through
+# the environment variable the acpp driver reads (the release workflow does the same).
+export ACPP_TARGETS="generic;cuda:${CUDA_ARCH}"
+CXX_FLAGS=""
 if [[ -n "${CUDA_PATH}" ]]; then
     CXX_FLAGS="${CXX_FLAGS} --acpp-cuda-path=${CUDA_PATH}"
 fi
 CXX_FLAGS="${CXX_FLAGS} -I/usr/include"
-
 LINK_FLAGS="-L/usr/lib/aarch64-linux-gnu"
 if [[ -n "${CUDA_PATH}" && -d "${CUDA_PATH}/lib64" ]]; then
     LINK_FLAGS="${LINK_FLAGS} -L${CUDA_PATH}/lib64"
 fi
+# The "cuda:sm_<arch>" target makes clang emit a CUDA fatbin plus host registration stubs,
+# which need libcudart; it must come after the objects, hence CXX_STANDARD_LIBRARIES.
+STD_LIBS="-lcudart"
 
 echo ""
 echo "=== Step 1: Configuring with CMake & Ninja ==="
@@ -142,6 +147,7 @@ cmake -B "${BUILD_DIR}" -S "${REPO_DIR}" -G Ninja \
     -DCMAKE_CXX_FLAGS="${CXX_FLAGS}" \
     -DCMAKE_EXE_LINKER_FLAGS="${LINK_FLAGS}" \
     -DCMAKE_SHARED_LINKER_FLAGS="${LINK_FLAGS}" \
+    -DCMAKE_CXX_STANDARD_LIBRARIES="${STD_LIBS}" \
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_SHARED_LIBS=OFF \
     -DBUILD_EXAMPLES=ON
