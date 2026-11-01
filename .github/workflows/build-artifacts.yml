@@ -355,10 +355,10 @@ jobs:
         with:
           environment-name: sycl-arm64
           create-args: >-
+            -c conda-forge
             adaptivecpp
             cmake
             ninja
-          channels: conda-forge
 
       - name: Configure and Build with CMake & Ninja
         shell: bash -el {0}
@@ -374,7 +374,7 @@ jobs:
         shell: bash -el {0}
         run: |
           STAGE="artifacts/sycl-imageprocess-linux-arm64"
-          mkdir -p "$STAGE/bin" "$STAGE/lib" "$STAGE/lib/hipSYCL" "$STAGE/include"
+          mkdir -p "$STAGE/bin" "$STAGE/lib" "$STAGE/include"
 
           # 1. Copy built executables and library
           find build -type f \( -name 'AmplitudeCallibrationSYCL' -o -name 'SimpleExample' \) -exec cp {} "$STAGE/bin/" \; || true
@@ -384,45 +384,75 @@ jobs:
           cp -r include/sycl_ip "$STAGE/include/" 2>/dev/null || cp -r include "$STAGE/include/" 2>/dev/null || true
           cp README.md LICENSE "$STAGE/" 2>/dev/null || true
 
-          # 3. Copy AdaptiveCpp and Boost runtime libraries
+          # 3. Copy AdaptiveCpp runtime, backend plugins, JIT bitcode and Boost/libstdc++ runtimes.
+          #    Symlinks are dereferenced (-L) so the package never points back into the toolchain.
           CONDA_LIB="$MAMBA_ROOT_PREFIX/envs/sycl-arm64/lib"
-          for pattern in 'libacpp*' 'librt-backend*' 'libboost_context*' 'libboost_fiber*' 'libstdc++.so*'; do
-            find "$CONDA_LIB" -maxdepth 1 -name "$pattern" -exec cp -a -u {} "$STAGE/lib/" \; 2>/dev/null || true
+          for pattern in 'libacpp*' 'librt-backend*' 'libllvm-to-*' 'libboost_context*' 'libboost_fiber*' 'libstdc++.so*' 'libgcc_s.so*'; do
+            find "$CONDA_LIB" -maxdepth 1 -name "$pattern" -exec cp -aL {} "$STAGE/lib/" \; 2>/dev/null || true
           done
           for boostdir in "$CONDA_LIB" "/usr/lib/aarch64-linux-gnu"; do
             if [ -d "$boostdir" ]; then
-              find "$boostdir" -maxdepth 1 \( -name 'libboost_context*.so*' -o -name 'libboost_fiber*.so*' \) -exec cp -a -u {} "$STAGE/lib/" \; 2>/dev/null || true
+              find "$boostdir" -maxdepth 1 \( -name 'libboost_context*.so*' -o -name 'libboost_fiber*.so*' \) -exec cp -aL {} "$STAGE/lib/" \; 2>/dev/null || true
             fi
           done
-          if [ -d "$CONDA_LIB/hipSYCL" ]; then
-            cp -a -u "$CONDA_LIB/hipSYCL"/* "$STAGE/lib/hipSYCL/" 2>/dev/null || true
-          fi
-          if [ -d "$CONDA_LIB/AdaptiveCpp" ]; then
-            cp -a -u "$CONDA_LIB/AdaptiveCpp"/* "$STAGE/lib/hipSYCL/" 2>/dev/null || true
-          fi
-
-          # 4. Resolve transitive dependencies via ldd
-          for bin in "$STAGE/bin"/* "$STAGE/lib"/*.so* "$STAGE/lib/hipSYCL"/*.so*; do
-            if [ -f "$bin" ]; then
-              ldd "$bin" 2>/dev/null | grep '=>' | awk '{print $3}' | grep -v '^$' | while read dep; do
-                if [[ "$dep" == *acpp* ]] || [[ "$dep" == *boost* ]] || [[ "$dep" == *cudart* ]]; then
-                  cp -a -u "$dep"* "$STAGE/lib/" 2>/dev/null || true
-                fi
-              done
+          for plugindir in "$CONDA_LIB/hipSYCL" "$CONDA_LIB/AdaptiveCpp"; do
+            if [ -d "$plugindir" ]; then
+              mkdir -p "$STAGE/lib/hipSYCL"
+              cp -aL "$plugindir"/* "$STAGE/lib/hipSYCL/" 2>/dev/null || true
             fi
           done
 
-          # 5. Patch RPATH on binaries and shared libraries
+          # 4. Close the runtime dependency closure of the CPU execution path.
+          #    The AdaptiveCpp OpenMP backend links against libllvm-to-*.so and libLLVM, which are
+          #    not covered by the copy list above; without them the backend plugin fails to load and
+          #    the process aborts ("No CPU backend has been loaded. Terminating.").
+          cpu_targets() {
+            local f
+            for f in "$STAGE/bin/AmplitudeCallibrationSYCL" "$STAGE/bin/SimpleExample" \
+                     "$STAGE/lib/libacpp-rt.so" "$STAGE/lib/libacpp-common.so" \
+                     "$STAGE/lib/libacpp-clang.so" \
+                     "$STAGE/lib/hipSYCL/librt-backend-omp.so" \
+                     "$STAGE/lib/hipSYCL/llvm-to-backend/libllvm-to-host.so" \
+                     "$STAGE/lib/hipSYCL/llvm-to-backend/libllvm-to-backend.so"; do
+              if [ -f "$f" ]; then
+                echo "$f"
+              fi
+            done
+          }
+          ldd_staged() {
+            cpu_targets | xargs -r -n1 env \
+              LD_LIBRARY_PATH="$STAGE/lib:$STAGE/lib/hipSYCL:$STAGE/lib/hipSYCL/llvm-to-backend" \
+              ldd 2>/dev/null
+          }
+          for pass in 1 2 3 4 5 6 7 8; do
+            missing=$(ldd_staged | awk '/not found/ {print $1}' | sort -u)
+            if [ -z "$missing" ]; then
+              break
+            fi
+            echo "Resolving runtime libraries (pass $pass): $(echo "$missing" | tr '\n' ' ')"
+            for soname in $missing; do
+              src=$(find "$CONDA_LIB" -maxdepth 1 -name "$soname" | head -n 1)
+              if [ -n "$src" ]; then
+                cp -aL "$src" "$STAGE/lib/" || true
+              fi
+            done
+          done
+
+          # 5. Give every staged binary package-relative RPATHs. Overwriting them with a single
+          #    directory broke plugin -> libllvm-to-*.so lookup, so the paths cover every lib level.
+          RPATH_LIB='$ORIGIN:$ORIGIN/..:$ORIGIN/../..:$ORIGIN/llvm-to-backend:$ORIGIN/../llvm-to-backend'
+          RPATH_BIN='$ORIGIN/../lib:$ORIGIN/../lib/hipSYCL:$ORIGIN/../lib/hipSYCL/llvm-to-backend:$ORIGIN'
           for bin in "$STAGE/bin"/*; do
-            if [ -f "$bin" ] && [ -x "$bin" ]; then
-              patchelf --set-rpath '$ORIGIN/../lib:$ORIGIN/../lib/hipSYCL:$ORIGIN' "$bin" 2>/dev/null || true
+            if [ -f "$bin" ]; then
+              patchelf --set-rpath "$RPATH_BIN" "$bin" || true
             fi
           done
-          for lib in "$STAGE/lib"/*.so* "$STAGE/lib/hipSYCL"/*.so*; do
-            if [ -f "$lib" ]; then
-              patchelf --set-rpath '$ORIGIN:$ORIGIN/../lib:$ORIGIN/hipSYCL' "$lib" 2>/dev/null || true
+          while IFS= read -r -d '' lib; do
+            # Only real ELF objects: patchelf chokes on linker scripts such as conda's libstdc++.so
+            if head -c 4 "$lib" | grep -q ELF; then
+              patchelf --set-rpath "$RPATH_LIB" "$lib" || true
             fi
-          done
+          done < <(find "$STAGE/lib" -type f -name '*.so*' -print0)
 
           # 6. Create run.sh launcher script in root
           cat << 'EOF' > "$STAGE/run.sh"
@@ -431,7 +461,6 @@ jobs:
           export LD_LIBRARY_PATH="$DIR/lib:$DIR/lib/hipSYCL:${LD_LIBRARY_PATH:-}"
           export ACPP_RT_PLUGIN_DIR="$DIR/lib/hipSYCL"
           export HIPSYCL_RT_PLUGIN_DIR="$DIR/lib/hipSYCL"
-          export ACPP_VISIBILITY_MASK="cuda;omp;generic"
           if [ $# -eq 0 ]; then
               exec "$DIR/bin/AmplitudeCallibrationSYCL" --help
           else
@@ -440,10 +469,18 @@ jobs:
           EOF
           chmod +x "$STAGE/run.sh" "$STAGE/bin/"*
 
-          # 7. Test standalone execution
+          # 7. Verify the package is self-contained: no unresolved libraries on the CPU path
+          unresolved=$(ldd_staged | awk '/not found/ {print}' | sort -u)
+          if [ -n "$unresolved" ]; then
+            echo "$unresolved"
+            echo "::error::ARM64 package is missing runtime libraries (see ldd output above)"
+            exit 1
+          fi
+
+          # 8. Test standalone execution with an environment stripped of the toolchain
           echo "Verifying staged ARM64 Linux binary..."
-          "$STAGE/run.sh" --help
-          "$STAGE/run.sh" --test --device cpu
+          env -i PATH=/usr/bin:/bin HOME="$HOME" "$STAGE/run.sh" --help
+          env -i PATH=/usr/bin:/bin HOME="$HOME" "$STAGE/run.sh" --test --device cpu
 
           tar -czvf artifacts/sycl-imageprocess-linux-arm64.tar.gz -C "$STAGE" .
 
