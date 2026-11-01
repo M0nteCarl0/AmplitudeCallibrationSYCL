@@ -86,6 +86,23 @@ for plugindir in "${TOOLCHAIN_LIB}/hipSYCL" "${TOOLCHAIN_LIB}/AdaptiveCpp"; do
     fi
 done
 
+# 3c. LLVM tools for AdaptiveCpp's runtime JIT. The runtime resolves opt/llc relative to
+#     libacpp-common.so, i.e. as $BUNDLE/lib/hipSYCL/ext/llvm/bin/<tool>, and otherwise falls back
+#     to the (non-relocatable) path of the build machine. Without them a "generic" target binary
+#     fails at runtime with "LLVMToPtx: opt invocation failed".
+TOOLCHAIN_BIN="$(dirname "${TOOLCHAIN_LIB}")/bin"
+LLVM_TOOL_BIN="${STAGE_DIR}/lib/hipSYCL/ext/llvm/bin"
+mkdir -p "${LLVM_TOOL_BIN}"
+for pattern in 'opt' 'opt-[0-9]*' 'llc' 'llc-[0-9]*' 'lld' 'lld-[0-9]*' 'ld.lld' 'ld.lld-[0-9]*'; do
+    find "${TOOLCHAIN_BIN}" -maxdepth 1 -name "${pattern}" -exec cp -aL {} "${LLVM_TOOL_BIN}/" \; 2>/dev/null || true
+done
+if ls "${LLVM_TOOL_BIN}"/opt* >/dev/null 2>&1; then
+    echo "Staged JIT tools: $(ls "${LLVM_TOOL_BIN}" | tr '\n' ' ')"
+else
+    echo "[WARN] No LLVM 'opt'/'llc' found in ${TOOLCHAIN_BIN}; runtime JIT of kernels will not work." >&2
+    echo "       Install the matching 'llvm-tools' package into the SYCL environment." >&2
+fi
+
 # 3b. CUDA runtime and Boost from the system (Jetson provides them outside the SYCL env)
 if [[ -n "${CUDA_LIBDIR}" ]]; then
     for pattern in 'libcudart.so*' 'libnvrtc.so*'; do
@@ -170,7 +187,7 @@ done
 #    libllvm-to-*.so lookup (they live in lib/hipSYCL/llvm-to-backend).
 if command -v patchelf &>/dev/null; then
     echo "Patching ELF RPATH..."
-    RPATH_LIB='$ORIGIN:$ORIGIN/..:$ORIGIN/../..:$ORIGIN/llvm-to-backend:$ORIGIN/../llvm-to-backend'
+    RPATH_LIB='$ORIGIN:$ORIGIN/..:$ORIGIN/../..:$ORIGIN/../../..:$ORIGIN/../../../..:$ORIGIN/llvm-to-backend:$ORIGIN/../llvm-to-backend:$ORIGIN/../../llvm-to-backend'
     RPATH_BIN='$ORIGIN/../lib:$ORIGIN/../lib/hipSYCL:$ORIGIN/../lib/hipSYCL/llvm-to-backend:$ORIGIN'
 
     for bin in "${STAGE_DIR}/bin"/*; do
@@ -179,12 +196,13 @@ if command -v patchelf &>/dev/null; then
         fi
     done
 
-    while IFS= read -r -d '' lib; do
+    # Shared objects and the LLVM JIT tools (executables under lib/hipSYCL/ext/llvm/bin)
+    while IFS= read -r -d '' elf; do
         # Only real ELF objects: patchelf chokes on linker scripts such as conda's libstdc++.so
-        if head -c 4 "${lib}" | grep -q ELF; then
-            patchelf --set-rpath "${RPATH_LIB}" "${lib}" 2>/dev/null || true
+        if head -c 4 "${elf}" | grep -q ELF; then
+            patchelf --set-rpath "${RPATH_LIB}" "${elf}" 2>/dev/null || true
         fi
-    done < <(find "${STAGE_DIR}/lib" -type f -name '*.so*' -print0)
+    done < <(find "${STAGE_DIR}/lib" -type f \( -name '*.so*' -o -perm -u+x \) -print0)
 else
     echo "[WARN] patchelf not found; run.sh launcher will set LD_LIBRARY_PATH and plugin paths."
 fi

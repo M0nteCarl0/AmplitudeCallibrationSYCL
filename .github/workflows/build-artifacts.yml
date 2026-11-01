@@ -405,6 +405,23 @@ jobs:
             fi
           done
 
+          # 3b. LLVM tools for AdaptiveCpp's runtime JIT. The runtime resolves opt/llc relative to
+          #     libacpp-common.so, i.e. as $BUNDLE/lib/hipSYCL/ext/llvm/bin/<tool>, and otherwise
+          #     falls back to the (non-relocatable) path of the build machine. Without them the
+          #     generic target fails at runtime with "LLVMToPtx: opt invocation failed".
+          CONDA_BIN="$MAMBA_ROOT_PREFIX/envs/sycl-arm64/bin"
+          LLVM_TOOL_BIN="$STAGE/lib/hipSYCL/ext/llvm/bin"
+          mkdir -p "$LLVM_TOOL_BIN"
+          for pattern in 'opt' 'opt-[0-9]*' 'llc' 'llc-[0-9]*' 'lld' 'lld-[0-9]*' 'ld.lld' 'ld.lld-[0-9]*'; do
+            find "$CONDA_BIN" -maxdepth 1 -name "$pattern" -exec cp -aL {} "$LLVM_TOOL_BIN/" \; 2>/dev/null || true
+          done
+          if ! ls "$LLVM_TOOL_BIN"/opt* >/dev/null 2>&1; then
+            echo "::error::AdaptiveCpp's JIT tools (opt/llc) were not found in $CONDA_BIN"
+            echo "        install the 'llvm-tools' package into the SYCL environment"
+            exit 1
+          fi
+          echo "Staged JIT tools: $(ls "$LLVM_TOOL_BIN" | tr '\n' ' ')"
+
           # 4. Stage every runtime library the packaged objects need and the toolchain provides.
           #    ldd is deliberately not used: on the runner the system LLVM is visible, so a missing
           #    bundled copy silently resolves to /usr/lib and the published package then fails on a
@@ -451,19 +468,20 @@ jobs:
 
           # 5. Give every staged binary package-relative RPATHs. Overwriting them with a single
           #    directory broke plugin -> libllvm-to-*.so lookup, so the paths cover every lib level.
-          RPATH_LIB='$ORIGIN:$ORIGIN/..:$ORIGIN/../..:$ORIGIN/llvm-to-backend:$ORIGIN/../llvm-to-backend'
+          #    This applies to the LLVM JIT tools as well (executables in ext/llvm/bin).
+          RPATH_LIB='$ORIGIN:$ORIGIN/..:$ORIGIN/../..:$ORIGIN/../../..:$ORIGIN/../../../..:$ORIGIN/llvm-to-backend:$ORIGIN/../llvm-to-backend:$ORIGIN/../../llvm-to-backend'
           RPATH_BIN='$ORIGIN/../lib:$ORIGIN/../lib/hipSYCL:$ORIGIN/../lib/hipSYCL/llvm-to-backend:$ORIGIN'
           for bin in "$STAGE/bin"/*; do
             if [ -f "$bin" ]; then
               patchelf --set-rpath "$RPATH_BIN" "$bin" || true
             fi
           done
-          while IFS= read -r -d '' lib; do
+          while IFS= read -r -d '' elf; do
             # Only real ELF objects: patchelf chokes on linker scripts such as conda's libstdc++.so
-            if head -c 4 "$lib" | grep -q ELF; then
-              patchelf --set-rpath "$RPATH_LIB" "$lib" || true
+            if head -c 4 "$elf" | grep -q ELF; then
+              patchelf --set-rpath "$RPATH_LIB" "$elf" || true
             fi
-          done < <(find "$STAGE/lib" -type f -name '*.so*' -print0)
+          done < <(find "$STAGE/lib" -type f \( -name '*.so*' -o -perm -u+x \) -print0)
 
           # 6. Create run.sh launcher script in root
           cat << 'EOF' > "$STAGE/run.sh"
@@ -502,10 +520,32 @@ jobs:
           echo "Staged backends: $(cd "$STAGE/lib/hipSYCL" && ls librt-backend-*.so | tr '\n' ' ')"
           echo "Driver libraries expected on the target machine: $EXTERNAL_LIBS"
 
-          # 8. Test standalone execution with an environment stripped of the toolchain
+          # 8. Test standalone execution with an environment stripped of the toolchain. The
+          #    toolchain's own LLVM tools are hidden for the duration of the test: after the
+          #    relocation performed here, the baked build-machine path no longer exists on a user
+          #    machine, so the bundle must use its own copies from lib/hipSYCL/ext/llvm/bin. This
+          #    is what makes the test fail for a package that only works on the build host.
           echo "Verifying staged ARM64 Linux binary..."
+          hidden=""
+          for tool in "$CONDA_BIN"/opt "$CONDA_BIN"/opt-[0-9]* "$CONDA_BIN"/llc "$CONDA_BIN"/llc-[0-9]*; do
+            if [ -e "$tool" ]; then
+              mv "$tool" "$tool.hidden"
+              hidden="$hidden $tool"
+            fi
+          done
+          set +e
           env -i PATH=/usr/bin:/bin HOME="$HOME" "$STAGE/run.sh" --help
+          help_status=$?
           env -i PATH=/usr/bin:/bin HOME="$HOME" "$STAGE/run.sh" --test --device cpu
+          test_status=$?
+          set -e
+          for tool in $hidden; do
+            mv "$tool.hidden" "$tool"
+          done
+          if [ "$help_status" -ne 0 ] || [ "$test_status" -ne 0 ]; then
+            echo "::error::staged ARM64 package does not run standalone (help=$help_status, tests=$test_status)"
+            exit 1
+          fi
 
           tar -czvf artifacts/sycl-imageprocess-linux-arm64.tar.gz -C "$STAGE" .
 

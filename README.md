@@ -64,8 +64,9 @@ int main() {
 
 - `--bench` mode: 10 timed iterations per kernel after one warm-up launch on the same buffers; one frame is 3328 × 3328 × 16 bit (21.1 MiB).
 - `Mem BW` is memory traffic derived from the pixel count and the buffers a kernel touches (×3 subtract, ×4 box blur, ×5 accumulate, ×6 repair); `eff` counts a single frame of I/O.
-- Toolchains: Intel oneAPI DPC++ (`icpx` / `icx`, Level-Zero) on x86_64, AdaptiveCpp 25.10 with `--acpp-targets=cuda:sm_87` (ahead-of-time) on Jetson.
-- The prebuilt Linux ARM64 package from [Releases](https://github.com/M0nteCarl0/AmplitudeCallibrationSYCL/releases) is compiled with AdaptiveCpp's default `generic` target: kernels are translated to PTX on first launch and cached in `~/.acpp`, so the first run pays the JIT cost while steady-state timings match this table — run `--bench` twice on the target device.
+- Toolchains: Intel oneAPI DPC++ (`icpx` / `icx`, Level-Zero) on x86_64; AdaptiveCpp 25.10 with its default `generic` target on Jetson, i.e. kernels are translated to PTX/host code on first launch and cached in `~/.acpp` (run `--bench` twice on the target device).
+- The prebuilt Linux ARM64 package from [Releases](https://github.com/M0nteCarl0/AmplitudeCallibrationSYCL/releases) uses the same `generic` configuration and ships the LLVM JIT tools, so these numbers are reproducible with it.
+- An ahead-of-time build (`--acpp-targets=cuda:sm_87`) reproduces the GPU figures but is far slower on the CPU side (Mean & RMS ≈ 5.7 s instead of ≈ 18 ms), so the CPU column is only meaningful for the `generic` configuration.
 
 Numbers come from the reference hardware listed above; re-measure on your own device for exact figures.
 
@@ -80,7 +81,7 @@ Numbers come from the reference hardware listed above; re-measure on your own de
 | **2D Box Blur Filter (5x5)** | **2.84 ms** | **352 FPS** (29.11 GB/s Mem BW) | 11.62 ms | **~4.1x** |
 | **Spike Noise Suppression** | **3.02 ms** | **331 FPS** | 71.93 ms | **~23.8x** |
 
-### NVIDIA Jetson Orin — ARM64, JetPack 6, AOT `--acpp-targets=cuda:sm_87`
+### NVIDIA Jetson Orin — ARM64, JetPack 6, AdaptiveCpp `generic` target
 
 | Operation | Orin GPU (`sm_87`) | Orin GPU Throughput | Cortex-A78AE CPU | Speedup |
 | :--- | :---: | :---: | :---: | :---: |
