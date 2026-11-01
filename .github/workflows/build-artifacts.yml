@@ -348,7 +348,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build patchelf libboost-fiber-dev libboost-context-dev
+          sudo apt-get install -y --no-install-recommends ninja-build patchelf binutils libboost-fiber-dev libboost-context-dev
 
       - name: Setup Micromamba and install AdaptiveCpp
         uses: mamba-org/setup-micromamba@v2
@@ -405,52 +405,48 @@ jobs:
             fi
           done
 
-          # 4. Close the runtime dependency closure of the packaged backends.
-          #    AdaptiveCpp needs libLLVM at runtime (llvm-to-host for the CPU backend, llvm-to-ptx
-          #    for the CUDA backend); without it the backend plugin fails to load and the process
-          #    aborts with "No CPU backend has been loaded. Terminating.". Libraries that belong to
-          #    the GPU driver of the target machine must never be staged from the toolchain.
+          # 4. Stage every runtime library the packaged objects need and the toolchain provides.
+          #    ldd is deliberately not used: on the runner the system LLVM is visible, so a missing
+          #    bundled copy silently resolves to /usr/lib and the published package then fails on a
+          #    clean machine ("No CPU backend has been loaded. Terminating."). NEEDED entries are
+          #    therefore resolved against the conda prefix explicitly, while GPU driver libraries
+          #    of the target machine are never staged.
           EXTERNAL_LIBS="libcuda.so.1 libnvidia-ml.so.1 libamdhip64.so.6 libhiprtc.so.6 libOpenCL.so.1"
-          runtime_targets() {
-            local f
-            for f in "$STAGE/bin/AmplitudeCallibrationSYCL" "$STAGE/bin/SimpleExample" \
-                     "$STAGE/lib/libacpp-rt.so" "$STAGE/lib/libacpp-common.so" \
-                     "$STAGE/lib/libacpp-clang.so" \
-                     "$STAGE/lib/hipSYCL/librt-backend-omp.so" \
-                     "$STAGE/lib/hipSYCL/librt-backend-cuda.so" \
-                     "$STAGE/lib/hipSYCL/llvm-to-backend/libllvm-to-host.so" \
-                     "$STAGE/lib/hipSYCL/llvm-to-backend/libllvm-to-ptx.so" \
-                     "$STAGE/lib/hipSYCL/llvm-to-backend/libllvm-to-backend.so"; do
-              if [ -f "$f" ]; then
-                echo "$f"
-              fi
-            done
+          if ! command -v readelf >/dev/null 2>&1; then
+            echo "::error::readelf is required to analyse the package dependencies"
+            exit 1
+          fi
+          needed_of() {
+            readelf -d "$1" 2>/dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\].*/\1/p'
           }
-          ldd_staged() {
-            runtime_targets | xargs -r -n1 env \
-              LD_LIBRARY_PATH="$STAGE/lib:$STAGE/lib/hipSYCL:$STAGE/lib/hipSYCL/llvm-to-backend" \
-              ldd 2>/dev/null
+          staged_elfs() {
+            find "$STAGE/bin" "$STAGE/lib" -type f \( -name '*.so*' -o -perm -u+x \) 2>/dev/null
           }
-          unresolved_libs() {
-            local soname
-            for soname in $(ldd_staged | awk '/not found/ {print $1}' | sort -u); do
-              if ! echo " $EXTERNAL_LIBS " | grep -q " $soname "; then
-                echo "$soname"
-              fi
-            done
+          in_bundle() {
+            [ -e "$STAGE/lib/$1" ] || [ -e "$STAGE/lib/hipSYCL/$1" ] \
+              || [ -e "$STAGE/lib/hipSYCL/llvm-to-backend/$1" ]
+          }
+          is_external() {
+            echo " $EXTERNAL_LIBS " | grep -q " $1 "
           }
           for pass in 1 2 3 4 5 6 7 8; do
-            missing=$(unresolved_libs)
-            if [ -z "$missing" ]; then
+            added=0
+            while IFS= read -r elf; do
+              for soname in $(needed_of "$elf"); do
+                if in_bundle "$soname" || is_external "$soname"; then
+                  continue
+                fi
+                src=$(find "$CONDA_LIB" -maxdepth 1 -name "$soname" | head -n 1)
+                if [ -n "$src" ]; then
+                  cp -aL "$src" "$STAGE/lib/" || true
+                  echo "  [deps] staged $soname (needed by $(basename "$elf"))"
+                  added=$((added + 1))
+                fi
+              done
+            done < <(staged_elfs)
+            if [ "$added" -eq 0 ]; then
               break
             fi
-            echo "Resolving runtime libraries (pass $pass): $(echo "$missing" | tr '\n' ' ')"
-            for soname in $missing; do
-              src=$(find "$CONDA_LIB" -maxdepth 1 -name "$soname" | head -n 1)
-              if [ -n "$src" ]; then
-                cp -aL "$src" "$STAGE/lib/" || true
-              fi
-            done
           done
 
           # 5. Give every staged binary package-relative RPATHs. Overwriting them with a single
@@ -484,11 +480,23 @@ jobs:
           EOF
           chmod +x "$STAGE/run.sh" "$STAGE/bin/"*
 
-          # 7. Verify the package is self-contained: no unresolved libraries except GPU drivers
-          unresolved=$(unresolved_libs)
-          if [ -n "$unresolved" ]; then
-            echo "$unresolved"
-            echo "::error::ARM64 package is missing runtime libraries (see ldd output above)"
+          # 7. Verify: every NEEDED library is bundled, provided by the GPU driver, or is a system
+          #    library the toolchain cannot supply (glibc, dynamic loader).
+          failures=0
+          while IFS= read -r elf; do
+            for soname in $(needed_of "$elf"); do
+              if in_bundle "$soname" || is_external "$soname"; then
+                continue
+              fi
+              if [ -z "$(find "$CONDA_LIB" -maxdepth 1 -name "$soname" | head -n 1)" ]; then
+                continue
+              fi
+              echo "MISSING: $(basename "$elf") -> $soname"
+              failures=$((failures + 1))
+            done
+          done < <(staged_elfs)
+          if [ "$failures" -ne 0 ]; then
+            echo "::error::ARM64 package is missing runtime libraries (see MISSING lines above)"
             exit 1
           fi
           echo "Staged backends: $(cd "$STAGE/lib/hipSYCL" && ls librt-backend-*.so | tr '\n' ' ')"
@@ -548,6 +556,7 @@ jobs:
             release-assets-win/sycl-imageprocess-windows-x64.zip
             release-assets-linux/sycl-imageprocess-linux-x64.tar.gz
             release-assets-linux-arm64/sycl-imageprocess-linux-arm64.tar.gz
+          overwrite: true
           draft: false
           prerelease: false
           generate_release_notes: true
