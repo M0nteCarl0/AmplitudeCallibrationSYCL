@@ -357,16 +357,16 @@ jobs:
           # The CUDA-enabled flavour of AdaptiveCpp is required for GPU SYCL on ARM64: the default
           # variant of the conda package only ships the omp (CPU) and ocl (OpenCL) backends.
           # cuda12* is intentional - Jetson Orin (JetPack 6) provides the CUDA 12 driver/runtime.
-          # The CUDA dev stack (headers + ptxas) is needed for the ahead-of-time sm_87 build,
-          # pinned to 12.9 to match the cuda129 AdaptiveCpp variant. cuda-nvcc-tools is used
-          # instead of cuda-nvcc on purpose: the latter pulls the gcc-7 toolchain with binutils
-          # 2.36, whose ld cannot read the .relr.dyn sections of the conda sysroot and therefore
-          # breaks every link, including the CMake compiler test.
+          # The CUDA dev stack is needed for the ahead-of-time sm_87 build, pinned to 12.9 to
+          # match the cuda129 AdaptiveCpp variant. cuda-nvcc is required: it is what ships the
+          # CUDA CRT headers (crt/host_defines.h) that clang's CUDA wrapper includes. It also
+          # pulls gcc-7/binutils 2.36, whose ld cannot read the .relr.dyn sections of the conda
+          # sysroot - the build step therefore links with lld (see -fuse-ld below).
           create-args: >-
             -c conda-forge
             adaptivecpp=*=cuda12*
             cuda-version=12.9
-            cuda-nvcc-tools=12.9
+            cuda-nvcc=12.9
             cuda-cudart-dev=12.9
             libcurand-dev=10.3
             cmake
@@ -393,11 +393,15 @@ jobs:
           echo "ACPP_TARGETS=$ACPP_TARGETS"
           echo "CUDA include dir: $CUDA_INC"
           echo "ptxas: $(command -v ptxas || echo MISSING)"
+          # lld is used on purpose: the gcc-7 toolchain that cuda-nvcc depends on ships
+          # binutils 2.36, whose ld cannot read the .relr.dyn sections of the conda sysroot.
+          linker_probe=$(acpp -fuse-ld=lld -### -x c++ /dev/null 2>&1 | grep -o 'ld\.lld' | head -n 1 || true)
+          echo "linker: ${linker_probe:-<lld not used>}"
 
           cmake -B build -G Ninja \
             -DCMAKE_CXX_COMPILER=acpp \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_CXX_FLAGS="--acpp-cuda-path=$CONDA_PREFIX -I$CUDA_INC" \
+            -DCMAKE_CXX_FLAGS="--acpp-cuda-path=$CONDA_PREFIX -I$CUDA_INC -fuse-ld=lld" \
             -DCMAKE_EXE_LINKER_FLAGS="-L$CONDA_PREFIX/lib" \
             -DCMAKE_CXX_STANDARD_LIBRARIES="-lcudart" \
             -DBUILD_SHARED_LIBS=OFF \
