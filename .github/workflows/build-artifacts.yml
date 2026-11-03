@@ -357,13 +357,16 @@ jobs:
           # The CUDA-enabled flavour of AdaptiveCpp is required for GPU SYCL on ARM64: the default
           # variant of the conda package only ships the omp (CPU) and ocl (OpenCL) backends.
           # cuda12* is intentional - Jetson Orin (JetPack 6) provides the CUDA 12 driver/runtime.
-          # The CUDA dev stack (headers + nvcc/ptxas) is needed for the ahead-of-time sm_87 build;
-          # it is pinned to 12.9 to match the cuda129 AdaptiveCpp variant.
+          # The CUDA dev stack (headers + ptxas) is needed for the ahead-of-time sm_87 build,
+          # pinned to 12.9 to match the cuda129 AdaptiveCpp variant. cuda-nvcc-tools is used
+          # instead of cuda-nvcc on purpose: the latter pulls the gcc-7 toolchain with binutils
+          # 2.36, whose ld cannot read the .relr.dyn sections of the conda sysroot and therefore
+          # breaks every link, including the CMake compiler test.
           create-args: >-
             -c conda-forge
             adaptivecpp=*=cuda12*
             cuda-version=12.9
-            cuda-nvcc=12.9
+            cuda-nvcc-tools=12.9
             cuda-cudart-dev=12.9
             libcurand-dev=10.3
             cmake
